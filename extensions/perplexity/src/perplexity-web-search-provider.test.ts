@@ -29,8 +29,11 @@ function chatResponse(content = "Grounded answer", citations?: string[]) {
 }
 
 function requestBody() {
-  const [request] = endpointMock.mock.calls[0] as [{ init: RequestInit }];
-  return JSON.parse(request.init.body as string);
+  return JSON.parse(request().init.body as string);
+}
+
+function request(): { url: string; init: RequestInit; signal?: AbortSignal } {
+  return endpointMock.mock.calls[0][0];
 }
 
 type RoutingCase = {
@@ -42,19 +45,32 @@ type RoutingCase = {
   model?: string;
   overrides?: { baseUrl?: string; model?: string };
 };
+type ValidationCase = {
+  structured: boolean;
+  args: Record<string, unknown>;
+  error: string;
+  message: string;
+};
+type ResponseRunner = (response: Response) => Promise<unknown>;
 
 function mockResponse(body: unknown): void {
-  endpointMock.mockImplementationOnce(
-    async (_params: { init: RequestInit }, run: (response: Response) => Promise<unknown>) =>
-      await run(Response.json(body)),
+  endpointMock.mockImplementationOnce(async (_params: { init: RequestInit }, run: ResponseRunner) =>
+    run(Response.json(body)),
   );
 }
 
-function createTool(structured: boolean, apiKey = directKey, cacheTtlMinutes?: number) {
-  const webSearch = {
-    apiKey,
-    ...(structured ? {} : { baseUrl: directUrl }),
+function searchResponse(...names: string[]) {
+  return {
+    results: names.map((name) => ({
+      title: name,
+      url: `https://example.test/${name}`,
+      snippet: name,
+    })),
   };
+}
+
+function createTool(structured: boolean, apiKey = directKey, cacheTtlMinutes?: number) {
+  const webSearch = { apiKey, ...(structured ? {} : { baseUrl: directUrl }) };
   const tool = createPerplexityWebSearchProvider().createTool({
     config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
     searchConfig: { cacheTtlMinutes },
@@ -71,9 +87,8 @@ describe("perplexity web search provider", () => {
   });
 
   it.each([true, false])("redacts reflected credentials (native=%s)", async (structured) => {
-    endpointMock.mockImplementationOnce(
-      async (_params: unknown, run: (response: Response) => Promise<unknown>) =>
-        run(new Response("rejected s7Key", { status: 401 })),
+    endpointMock.mockImplementationOnce(async (_params: unknown, run: ResponseRunner) =>
+      run(new Response("rejected s7Key", { status: 401 })),
     );
     const label = structured ? "Perplexity Search" : "Perplexity";
     await expect(createTool(structured, "s7Key").execute({ query: "redaction" })).rejects.toThrow(
@@ -85,8 +100,7 @@ describe("perplexity web search provider", () => {
     await withEnvAsync(
       { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: undefined },
       async () => {
-        const tool = createTool(true, "");
-        await expect(tool.execute({ query: "OpenClaw docs" })).resolves.toEqual({
+        await expect(createTool(true, "").execute({ query: "OpenClaw docs" })).resolves.toEqual({
           error: "missing_perplexity_api_key",
           message:
             "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure plugins.entries.perplexity.config.webSearch.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
@@ -108,18 +122,8 @@ describe("perplexity web search provider", () => {
     ${true}    | ${{ date_after: "invalid", date_before: "also-invalid", domain_filter: ["allowed.test", "-denied.test"] }} | ${"invalid_date"}               | ${"date_after must be YYYY-MM-DD format."}
     ${true}    | ${{ date_after: "2024-01-01", date_before: "invalid" }}                                                    | ${"invalid_date"}               | ${"date_before must be YYYY-MM-DD format."}
   `(
-    "preserves validation precedence (native=$structured, args=$args): $error",
-    async ({
-      structured,
-      args,
-      error,
-      message,
-    }: {
-      structured: boolean;
-      args: Record<string, unknown>;
-      error: string;
-      message: string;
-    }) => {
+    "validates $error before later options (native=$structured)",
+    async ({ structured, args, error, message }: ValidationCase) => {
       await expect(
         createTool(structured).execute({ query: "validation", ...args }),
       ).resolves.toEqual({
@@ -138,12 +142,11 @@ describe("perplexity web search provider", () => {
 
   it("does not start an already canceled request", async () => {
     endpointMock.mockResolvedValue({ results: [] });
-    const tool = createTool(true);
     const controller = new AbortController();
     controller.abort(new Error("Perplexity caller canceled"));
 
     await expect(
-      tool.execute({ query: "perplexity pre-canceled" }, { signal: controller.signal }),
+      createTool(true).execute({ query: "perplexity pre-canceled" }, { signal: controller.signal }),
     ).rejects.toThrow("Perplexity caller canceled");
     expect(endpointMock).not.toHaveBeenCalled();
   });
@@ -151,9 +154,7 @@ describe("perplexity web search provider", () => {
   it("disables cache reads and writes without replacing existing entries", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     for (const result of ["initial", "fresh", "uncached"]) {
-      mockResponse({
-        results: [{ title: result, url: `https://example.test/${result}` }],
-      });
+      mockResponse(searchResponse(result));
     }
 
     try {
@@ -180,54 +181,42 @@ describe("perplexity web search provider", () => {
     }
   });
 
-  it.each([true, false])(
-    "keeps cached answers scoped to the request credential (native=%s)",
-    async (structured) => {
-      endpointMock.mockImplementation(
-        async (request: { init: RequestInit }, run: (response: Response) => Promise<unknown>) => {
-          const credential = new Headers(request.init.headers).get("authorization");
-          const account =
-            credential === "Bearer perplexity-account-a"
-              ? "account-a"
-              : credential === "Bearer perplexity-account-b"
-                ? "account-b"
-                : undefined;
-          if (!account) {
-            throw new Error("Unexpected synthetic Perplexity credential");
-          }
-          return run(
-            Response.json(
-              structured
-                ? { results: [{ title: account, url: `https://example.com/${account}` }] }
-                : chatResponse(account, [`https://example.com/${account}`]),
-            ),
-          );
-        },
+  it.each([true, false])("isolates cached credentials (native=%s)", async (structured) => {
+    endpointMock.mockImplementation(async (params: { init: RequestInit }, run: ResponseRunner) => {
+      const credential = new Headers(params.init.headers).get("authorization");
+      expect(["Bearer perplexity-account-a", "Bearer perplexity-account-b"]).toContain(credential);
+      const account = credential?.slice("Bearer perplexity-".length);
+      return run(
+        Response.json(
+          structured
+            ? { results: [{ title: account, url: `https://example.com/${account}` }] }
+            : chatResponse(account, [`https://example.com/${account}`]),
+        ),
       );
-      const accountA = createTool(structured, "perplexity-account-a");
-      const accountB = createTool(structured, "perplexity-account-b");
-      const args = { query: `Perplexity credential-scoped answers ${structured}` };
-      const first = await accountA.execute(args);
-      const second = await accountB.execute(args);
-      const repeated = await accountA.execute(args);
+    });
+    const accountA = createTool(structured, "perplexity-account-a");
+    const accountB = createTool(structured, "perplexity-account-b");
+    const args = { query: `Perplexity credential-scoped answers ${structured}` };
+    const first = await accountA.execute(args);
+    const second = await accountB.execute(args);
+    const repeated = await accountA.execute(args);
 
-      if (structured) {
-        expect(first).toMatchObject({ results: [{ url: "https://example.com/account-a" }] });
-        expect(second).toMatchObject({ results: [{ url: "https://example.com/account-b" }] });
-      } else {
-        expect(first).toMatchObject({
-          content: expect.stringContaining("account-a"),
-          citations: ["https://example.com/account-a"],
-        });
-        expect(second).toMatchObject({
-          content: expect.stringContaining("account-b"),
-          citations: ["https://example.com/account-b"],
-        });
-      }
-      expect(repeated).toEqual({ ...first, cached: true });
-      expect(endpointMock).toHaveBeenCalledTimes(2);
-    },
-  );
+    for (const [result, account] of [
+      [first, "account-a"],
+      [second, "account-b"],
+    ] as const) {
+      expect(result).toMatchObject(
+        structured
+          ? { results: [{ url: `https://example.com/${account}` }] }
+          : {
+              content: expect.stringContaining(account),
+              citations: [`https://example.com/${account}`],
+            },
+      );
+    }
+    expect(repeated).toEqual({ ...first, cached: true });
+    expect(endpointMock).toHaveBeenCalledTimes(2);
+  });
 
   it.each([
     { name: "missing choices", response: {} },
@@ -248,14 +237,8 @@ describe("perplexity web search provider", () => {
     expect(endpointMock).toHaveBeenCalledTimes(2);
   });
 
-  it("caps returned and cached results when the Perplexity Search API exceeds the requested count", async () => {
-    mockResponse({
-      results: [
-        { url: "https://example.com/first", title: "First", snippet: "first" },
-        { url: "https://example.com/second", title: "Second", snippet: "second" },
-        { url: "https://example.com/third", title: "Third", snippet: "third" },
-      ],
-    });
+  it("caps returned and cached native results to the requested count", async () => {
+    mockResponse(searchResponse("first", "second", "third"));
     const tool = createTool(true);
     const args = { query: "perplexity result count owner", count: 1 };
 
@@ -267,53 +250,45 @@ describe("perplexity web search provider", () => {
     expect(first).toMatchObject({
       provider: "perplexity",
       count: 1,
-      results: [{ url: "https://example.com/first" }],
+      results: [{ url: "https://example.test/first" }],
     });
     expect(first.results).toHaveLength(1);
     expect(cached).toEqual({ ...first, cached: true });
   });
 
-  it.each([
-    { name: "chat completions", structured: false, expectedRequests: 1 },
-    { name: "native Search API", structured: true, expectedRequests: 2 },
-  ])(
-    "uses count as a cache dimension only when $name sends it upstream",
-    async ({ name, structured, expectedRequests }) => {
-      const annotation = {
-        type: "url_citation",
-        url_citation: { url: "https://example.test/citation" },
-      };
-      const message = { content: "Grounded answer", annotations: [annotation] };
-      const response = structured ? { results: [] } : { choices: [{ message }] };
+  it.each([false, true])("keys cache by count only if native=%s", async (structured) => {
+    const annotation = {
+      type: "url_citation",
+      url_citation: { url: "https://example.test/citation" },
+    };
+    const response = structured
+      ? { results: [] }
+      : { choices: [{ message: { content: "Grounded answer", annotations: [annotation] } }] };
+    mockResponse(response);
+    if (structured) {
       mockResponse(response);
-      if (structured) {
-        mockResponse(response);
-      }
+    }
 
-      const tool = createTool(structured);
-      const query = `perplexity cache count ${name}`;
-      const first = await tool.execute({ query, count: 1 });
-      const second = await tool.execute({ query, count: 7 });
-      const third = await tool.execute({ query, count: 1 });
+    const tool = createTool(structured);
+    const query = `perplexity cache count ${structured}`;
+    const first = await tool.execute({ query, count: 1 });
+    const second = await tool.execute({ query, count: 7 });
+    const third = await tool.execute({ query, count: 1 });
 
-      expect(first.cached).toBeUndefined();
-      expect(second.cached).toBe(structured ? undefined : true);
-      expect(third.cached).toBe(true);
-      expect(endpointMock).toHaveBeenCalledTimes(expectedRequests);
-      if (structured) {
-        expect(first.results).toEqual([]);
-        expect(first.count).toBe(0);
-      } else {
-        expect(first.content).toContain("Grounded answer");
-        expect(first.citations).toEqual(["https://example.test/citation"]);
-      }
-    },
-  );
+    expect(first.cached).toBeUndefined();
+    expect(second.cached).toBe(structured ? undefined : true);
+    expect(third.cached).toBe(true);
+    expect(endpointMock).toHaveBeenCalledTimes(structured ? 2 : 1);
+    if (structured) {
+      expect(first.results).toEqual([]);
+      expect(first.count).toBe(0);
+    } else {
+      expect(first.content).toContain("Grounded answer");
+      expect(first.citations).toEqual(["https://example.test/citation"]);
+    }
+  });
 
-  it.each([
-    { name: "native Search API", structured: true },
-    { name: "chat completions", structured: false },
-  ])("cancels an in-flight $name request", async ({ name, structured }) => {
+  it.each([true, false])("cancels an in-flight request (native=%s)", async (structured) => {
     endpointMock.mockImplementation(
       async (params: { signal?: AbortSignal }) =>
         await new Promise<never>((_resolve, reject) => {
@@ -326,10 +301,9 @@ describe("perplexity web search provider", () => {
           });
         }),
     );
-    const tool = createTool(structured);
     const controller = new AbortController();
-    const result = tool.execute(
-      { query: `perplexity in-flight cancellation ${name}` },
+    const result = createTool(structured).execute(
+      { query: `perplexity in-flight cancellation ${structured}` },
       { signal: controller.signal },
     );
 
@@ -337,7 +311,7 @@ describe("perplexity web search provider", () => {
     controller.abort(new Error("Perplexity request canceled in flight"));
 
     await expect(result).rejects.toThrow("Perplexity request canceled in flight");
-    expect(endpointMock.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
+    expect(request().signal).toBe(controller.signal);
   });
 
   it.each`
@@ -353,8 +327,7 @@ describe("perplexity web search provider", () => {
     ${"blank overrides"}                                   | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/search`}                        | ${undefined}             | ${{ baseUrl: " ", model: " " }}
   `(
     "routes $name consistently through metadata, schema and execution",
-    async (entry: RoutingCase) => {
-      const { key, source, url, fallbackEnvVar, overrides, model, name } = entry;
+    async ({ key, source, url, fallbackEnvVar, overrides, model, name }: RoutingCase) => {
       await withEnvAsync(
         {
           [perplexityApiKeyEnv]: undefined,
@@ -398,10 +371,9 @@ describe("perplexity web search provider", () => {
           const query = `routing ${name}`;
           await tool.execute({ query });
           expect(endpointMock).toHaveBeenCalledOnce();
-          const [request] = endpointMock.mock.calls[0] as [{ url: string; init: RequestInit }];
-          expect(request.url).toBe(url);
-          expect(new Headers(request.init.headers).get("authorization")).toBe(`Bearer ${key}`);
-          expect(JSON.parse(request.init.body as string)).toEqual(
+          expect(request().url).toBe(url);
+          expect(new Headers(request().init.headers).get("authorization")).toBe(`Bearer ${key}`);
+          expect(requestBody()).toEqual(
             chat
               ? { model, messages: [{ role: "user", content: query }] }
               : { query, max_results: 5 },
