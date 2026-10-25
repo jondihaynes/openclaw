@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 270371,
-  "reason": "Settings demand loading previously reduced remote readiness by 20.77% and scripting by 49.68%, deferring 1702960 reply bytes. Integrated with main ba9f1eacbd0: same-host startup 270216 to 270371 B gzip (+155 B), five JS and one CSS request; Chat +225 B, New Session +50 B. Ratchet to the measured integrated head.",
+  "startupJsGzipBytes": 270631,
+  "reason": "Data-page rendering: 20 interleaved A/B/A pairs cut Board update scripting CPU by 73% and task CPU by 54%, and gallery sort task CPU by 54%. Same-host startup 270467 to 270631 B gzip (+164 B), five JS and one CSS request; startup CSS unchanged. Accept the measured CPU win and ratchet to this head.",
   "updatedAt": "2026-10-25"
 }
