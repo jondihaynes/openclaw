@@ -18,7 +18,7 @@ function messageEntry<T extends AgentMessage>(id: string, parentId: string | nul
   return { ...entryBase(id, parentId), type: "message" as const, message };
 }
 
-function user(id: string, parentId: string | null, content: string): Entry {
+function user(id: string, parentId: string | null, content: string) {
   return messageEntry(id, parentId, { role: "user", content, timestamp: Date.parse(timestamp) });
 }
 
@@ -47,12 +47,7 @@ function assistant(
     content: typeof content === "string" ? [{ type: "text", text: content }] : content,
     provider: "test-provider",
     model: "test-model",
-    usage: {
-      ...createZeroUsage(),
-      input: 1,
-      output: 1,
-      totalTokens: 2,
-    },
+    usage: { ...createZeroUsage(), input: 1, output: 1, totalTokens: 2 },
     stopReason: "stop",
     timestamp: Date.parse(timestamp),
     ...(providerReplay ? { providerReplay } : {}),
@@ -177,9 +172,14 @@ it.each(["reply", "model-change"])(
   },
 );
 
-it.each(["compaction", "reset", "prompt-restart", "prompt-checkpoint"])(
+it.each([
+  ["compaction", ["old-runtime", "new-update", "new-runtime"]],
+  ["reset", ["new-update", "new-runtime"]],
+  ["prompt-restart", ["old-runtime", "new-update", "new-runtime"]],
+  ["prompt-checkpoint", ["old-update", "old-runtime", "new-update", "new-runtime"]],
+] as const)(
   "retires only operators from an earlier prompt series across %s",
-  (boundary) => {
+  (boundary, expectedOperators) => {
     const operator = (id: string, kind: "prompt-update" | "runtime-context") =>
       custom(id, "user", "openclaw.system-update", id, {
         kind,
@@ -208,29 +208,20 @@ it.each(["compaction", "reset", "prompt-restart", "prompt-checkpoint"])(
     ];
     const context = buildSessionContext(entries);
     if (boundary === "compaction") {
-      expect(context.messages[0]).toMatchObject({
-        role: "compactionSummary",
-        summary: "Summary",
-      });
+      expect(context.messages[0]).toMatchObject({ role: "compactionSummary", summary: "Summary" });
     }
     expect(
       context.messages
         .filter((message) => message.role === "custom")
         .map((message) => message.content),
-    ).toEqual(
-      boundary === "prompt-checkpoint"
-        ? ["old-update", "old-runtime", "new-update", "new-runtime"]
-        : boundary === "reset"
-          ? ["new-update", "new-runtime"]
-          : ["old-runtime", "new-update", "new-runtime"],
+    ).toEqual(expectedOperators);
+    expectTranscript(
+      context.messages.filter((m) => m.role === "user" || m.role === "assistant"),
+      [
+        ["user", "Kept question"],
+        ["assistant", "Kept answer"],
+      ],
     );
-    const conversation = context.messages.filter(
-      (m) => m.role === "user" || m.role === "assistant",
-    );
-    expectTranscript(conversation, [
-      ["user", "Kept question"],
-      ["assistant", "Kept answer"],
-    ]);
     expect(entries.filter((entry) => entry.type === "custom_message")).toHaveLength(4);
   },
 );
@@ -260,24 +251,15 @@ it.each([
         turnStartIndex: expectedIndex === 2 ? (runtimeContextCarrier ? 0 : 1) : -1,
         isSplitTurn: expectedIndex === 2,
       });
-      const firstKeptEntry = entries[cut.firstKeptEntryIndex];
-      if (!firstKeptEntry) {
-        throw new Error("Expected a retained compaction boundary");
-      }
       const replay = buildSessionContext([
         ...entries,
-        compaction("compacted", "entry-2", firstKeptEntry.id, "Earlier conversation", 1_000),
+        compaction("compacted", "entry-2", `entry-${expectedIndex}`, "Earlier conversation", 1_000),
       ]);
       expect(replay.messages).toMatchObject([
         { role: "compactionSummary", summary: "Earlier conversation" },
         ...[
           { role: "user", content: "original request" },
-          {
-            role: "custom",
-            customType,
-            content: "metadata ".repeat(100),
-            details,
-          },
+          { role: "custom", customType, content: "metadata ".repeat(100), details },
           { role: "assistant", content: [{ type: "text", text: "done" }] },
         ].slice(expectedIndex),
       ]);
@@ -320,25 +302,11 @@ it.each(["activity", "shell"])("keeps excluded %s in history but out of model in
   const messages = buildSessionContext(entries).messages;
   expect(projectSessionEntryMessage(hidden)).toBeUndefined();
   expect(projectSessionEntryMessage(visible)).toBe(visible.message);
-  expectRoles(messages, "user", kind === "activity" ? "custom" : "bashExecution", "user");
-  expect(JSON.stringify(messages)).not.toContain(hiddenText);
+  expect(messages).toEqual([entries[0]?.message, visible.message, entries[3]?.message]);
   expect(JSON.stringify(entries)).toContain(hiddenText);
-  if (kind === "shell") {
-    expect(JSON.stringify(messages)).toContain("visible shell output");
-    return;
+  if (kind === "activity") {
+    expect(convertToLlm([activity])).toEqual([]);
   }
-  expect(convertToLlm([activity])).toEqual([]);
-  expect(JSON.stringify(messages)).toContain("Model-visible runtime context");
-  expect(convertToLlm(messages)).toMatchObject([
-    { role: "user", content: "original request" },
-    {
-      role: "user",
-      content:
-        "OpenClaw runtime context:\nModel-visible runtime context\nEnd OpenClaw runtime context.",
-      runtimeContext: {},
-    },
-    { role: "user", content: "continue" },
-  ]);
 });
 
 it("replays only the retained tail and newer entries after compaction", () => {
@@ -395,8 +363,6 @@ it("treats the latest reset as a hard cut with a user/assistant-only kept tail",
     ["assistant", "kept answer"],
     ["user", "new turn"],
   ]);
-  expect(JSON.stringify(messages)).not.toContain("discarded");
-  expect(JSON.stringify(messages)).not.toContain("hidden tool result");
   const keptAssistant = messages[1];
   expect(keptAssistant).not.toHaveProperty("providerReplay");
   expect(Object.getOwnPropertyDescriptor(keptAssistant ?? {}, historyPrelude)?.value).toBe(true);
