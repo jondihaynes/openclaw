@@ -4,7 +4,7 @@ import {
   type AssistantMessage,
   type Context,
   type Model,
-  type ProviderStreamOptions,
+  type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import {
   buildOpenAICompletionsParams,
@@ -391,7 +391,7 @@ it.each(["enumerable", "non-enumerable", "inherited"] as const)(
       });
     }
     Object.freeze(options);
-    let wireOptions: ProviderStreamOptions | undefined;
+    let wireOptions: SimpleStreamOptions | undefined;
     const payload = { tool_choice: selection };
     const wrapped = wrapOllamaToolNames(async (wireModel, _input, prepared) => {
       wireOptions = prepared;
