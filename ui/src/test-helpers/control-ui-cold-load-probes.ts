@@ -348,10 +348,27 @@ function installColdLoadProbes(
     construct(target, args) {
       // The mock constructor returns its routed socket rather than its own instance.
       const socket: WebSocket = Reflect.construct(target, args);
+      let closed = false;
+      const events: Array<{ ready: boolean; deliver: () => void }> = [];
+      // A ready backlog still gets one message task per event.
+      const eventTurns = new MessageChannel();
+      const deliverEvent = () => {
+        const event = events[0];
+        if (!event?.ready) return;
+        events.shift();
+        event.deliver();
+        if (events[0]?.ready) eventTurns.port2.postMessage(null);
+      };
+      eventTurns.port1.onmessage = deliverEvent;
       // A closed transport cannot answer; count its attempts without blocking settlement.
       socket.addEventListener(
         "close",
         () => {
+          closed = true;
+          queued -= events.length;
+          events.length = 0;
+          eventTurns.port1.close();
+          eventTurns.port2.close();
           for (const [id, request] of pending) {
             if (request.socket !== socket) {
               continue;
@@ -396,6 +413,7 @@ function installColdLoadProbes(
         if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
           return dispatch(event);
         }
+        if (closed) return true;
         let deliveredEvent = event;
         const frame = JSON.parse(event.data);
         const responseBytes = new TextEncoder().encode(event.data).length;
@@ -482,6 +500,18 @@ function installColdLoadProbes(
           }
           lastActivity = performance.now();
         };
+        const ordered = frame.type === "event" ? { ready: false, deliver } : undefined;
+        if (ordered) events.push(ordered);
+        const ready = () => {
+          if (!ordered) {
+            deliver();
+            return;
+          }
+          if (closed) return;
+          // Fractional timer deadlines can become ready out of order; the wire cannot.
+          ordered.ready = true;
+          if (events[0] === ordered) deliverEvent();
+        };
         window.setTimeout(
           () => {
             if (input.downloadKbps) {
@@ -489,9 +519,9 @@ function installColdLoadProbes(
               // cannot hold unrelated replies behind it.
               nextWireAt =
                 Math.max(performance.now(), nextWireAt) + (responseBytes * 8) / input.downloadKbps;
-              window.setTimeout(deliver, Math.max(0, nextWireAt - performance.now()));
+              window.setTimeout(ready, Math.max(0, nextWireAt - performance.now()));
             } else {
-              deliver();
+              ready();
             }
           },
           Math.max(0, deliverAt - performance.now()),
