@@ -225,18 +225,12 @@ describe("promosClaimCommand", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
   });
 
-  it("aborts when the auth flow asks for retry instead of completing", async () => {
+  it.each([
+    ["the auth flow asks for retry", { config: {}, retrySelection: true }],
+    ["auth is still unavailable", { config: {} }],
+  ])("aborts when %s", async (_reason, result) => {
     mocks.hasAvailableAuthForProvider.mockResolvedValue(false);
-    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({
-      config: {},
-      retrySelection: true,
-    });
-    await rejectClaim(/not completed/, { apiKey: "sk-test" });
-  });
-
-  it("aborts when auth is still unavailable after the flow returns", async () => {
-    mocks.hasAvailableAuthForProvider.mockResolvedValue(false);
-    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({ config: {} });
+    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue(result);
     await rejectClaim(/not completed/, { apiKey: "sk-test" });
   });
 
