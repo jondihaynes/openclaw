@@ -89,29 +89,28 @@ function createProps(overrides: Partial<MemoryImportProps> = {}): MemoryImportPr
   };
 }
 
-function renderView(
-  overrides: Partial<MemoryImportProps> = {},
-  container = document.createElement("div"),
-) {
-  mountSolid(
-    () => {
-      const props = createProps(overrides);
-      const readPlan = createMemo(() =>
-        props.loading && !props.plan ? new Promise<never>(() => {}) : props.plan,
-      );
-      return <MemoryImport {...props} readPlan={readPlan} readScope={props} />;
-    },
-    { container },
-  );
+function renderView(overrides: Partial<MemoryImportProps> = {}) {
+  const { container } = mountSolid(() => {
+    const props = createProps(overrides);
+    const readPlan = createMemo(() =>
+      props.loading && !props.plan ? new Promise<never>(() => {}) : props.plan,
+    );
+    return <MemoryImport {...props} readPlan={readPlan} readScope={props} />;
+  });
   flush();
   return container;
 }
 
+function findButton(container: Element, testId: string) {
+  return expectDefined(
+    container.querySelector<HTMLButtonElement>(`[data-test-id='${testId}']`),
+    testId,
+  );
+}
+
 describe("renderMemoryImport", () => {
   it("renders shared skeletons while the import plan is loading", () => {
-    const container = document.createElement("div");
-    renderView({ loading: true, plan: null }, container);
-
+    const container = renderView({ loading: true, plan: null });
     const blocks = container.querySelectorAll(".memory-import__skeleton");
     expect(blocks).toHaveLength(2);
     expect([...blocks].every((block) => block.classList.contains("skeleton"))).toBe(true);
@@ -128,10 +127,7 @@ describe("renderMemoryImport", () => {
   });
 
   it("groups memory by source collection without rendering file contents", () => {
-    const plan = createPlan();
-    const container = document.createElement("div");
-    renderView({ plan }, container);
-
+    const container = renderView();
     expect(container.textContent).toContain("MEMORY.md");
     expect(container.textContent).toContain("memory_summary.md");
     expect(container.textContent).toContain("/tmp/openclaw-research/memory/imports/");
@@ -141,27 +137,20 @@ describe("renderMemoryImport", () => {
   });
 
   it("hides the agent row when only one agent is configured", () => {
-    const container = document.createElement("div");
-    renderView({}, container);
-
+    const container = renderView();
     expect(container.querySelector('openclaw-agent-select[name="memory-import-agent"]')).toBeNull();
     expect(container.textContent).not.toContain("Destination agent");
   });
 
   it("renders the avatar agent picker and routes agent changes", async () => {
     const onSelectAgent = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    renderView(
-      {
-        agents: [
-          { id: "research", name: "Research", identity: { emoji: "🔎" } },
-          { id: "writer", name: "Writer" },
-        ],
-        onSelectAgent,
-      },
-      container,
-    );
+    const container = renderView({
+      agents: [
+        { id: "research", name: "Research", identity: { emoji: "🔎" } },
+        { id: "writer", name: "Writer" },
+      ],
+      onSelectAgent,
+    });
 
     const picker = container.querySelector<
       HTMLElement & {
@@ -176,30 +165,25 @@ describe("renderMemoryImport", () => {
 
     picker?.onSelect("writer");
     expect(onSelectAgent).toHaveBeenCalledWith("writer");
-    container.remove();
   });
 
   it("renders per-day session backfill candidates and final staging progress", () => {
-    const container = document.createElement("div");
-    renderView(
-      {
-        readPreview: () => ({
-          days: 1,
-          candidates: 2,
-          staged: 0,
-          truncated: true,
-          perDay: [
-            {
-              day: "2026-07-01",
-              candidateCount: 2,
-              sample: ["Remember the release checklist", "Use the main agent"],
-            },
-          ],
-        }),
-        backfillProgress: { days: 3, candidates: 7, staged: 4, complete: true },
-      },
-      container,
-    );
+    const container = renderView({
+      readPreview: () => ({
+        days: 1,
+        candidates: 2,
+        staged: 0,
+        truncated: true,
+        perDay: [
+          {
+            day: "2026-07-01",
+            candidateCount: 2,
+            sample: ["Remember the release checklist", "Use the main agent"],
+          },
+        ],
+      }),
+      backfillProgress: { days: 3, candidates: 7, staged: 4, complete: true },
+    });
 
     expect(
       container.querySelector('.memory-import__backfill-preview [role="status"]')?.textContent,
@@ -213,30 +197,18 @@ describe("renderMemoryImport", () => {
 
   it("requires destructive confirmation before session backfill rollback", () => {
     const onBackfillRollbackConfirm = vi.fn();
-    const container = document.createElement("div");
-    renderView({ backfillRollbackPending: true, onBackfillRollbackConfirm }, container);
+    const container = renderView({ backfillRollbackPending: true, onBackfillRollbackConfirm });
 
     expect(container.textContent).toContain("Session backfill cursors are rewound");
-    container
-      .querySelector<HTMLButtonElement>("[data-test-id='memory-backfill-rollback-confirm']")
-      ?.click();
+    findButton(container, "memory-backfill-rollback-confirm").click();
     expect(onBackfillRollbackConfirm).toHaveBeenCalledOnce();
   });
 
   it("serializes memory imports with backfill mutations", () => {
-    const importing = document.createElement("div");
-    renderView({ applyingProviderId: "codex" }, importing);
-    expect(
-      importing.querySelector<HTMLButtonElement>("[data-test-id='memory-backfill-apply']")
-        ?.disabled,
-    ).toBe(true);
-
-    const backfilling = document.createElement("div");
-    renderView({ backfillBusy: "apply" }, backfilling);
-    expect(
-      backfilling.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
-        ?.disabled,
-    ).toBe(true);
+    const importing = renderView({ applyingProviderId: "codex" });
+    expect(findButton(importing, "memory-backfill-apply").disabled).toBe(true);
+    const backfilling = renderView({ backfillBusy: "apply" });
+    expect(findButton(backfilling, "memory-import-provider-button").disabled).toBe(true);
   });
 
   it("passes the exact collection item ids when selection changes", () => {
@@ -266,11 +238,7 @@ describe("renderMemoryImport", () => {
     });
 
     expect(container.textContent).toContain("backed up in the migration report");
-    const confirm = expectDefined(
-      container.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
-      "import confirmation button",
-    );
-    confirm.click();
+    findButton(container, "memory-import-confirm").click();
     expect(onConfirmImport).toHaveBeenCalledOnce();
   });
 
