@@ -2494,12 +2494,12 @@ try {
       if (sidebarView !== "sessions") {
         await page.locator('[data-navigation-view="sessions"]').click();
       }
-      // The next owner cycle is a direct chat visible in the fixture's Involving me window.
-      const target = fixture.scenario.sessions![fixture.counts.owners]!;
+      // The first non-main chat is in the initial Involving me page.
+      const target = fixture.scenario.sessions![1]!;
       const link = page.locator(
         `.sidebar-recent-session[data-session-key="${target.key}"] a.sidebar-recent-session__link`,
       );
-      await link.waitFor({ state: "visible" });
+      await link.scrollIntoViewIfNeeded();
       const rpcOffset = await page.evaluate(
         () => Reflect.get(window, "__coldLoad").read().rpcs.length,
       );
