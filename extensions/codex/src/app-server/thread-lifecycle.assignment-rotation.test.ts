@@ -46,7 +46,9 @@ async function fixture(
 ) {
   if (inferenceConfig) {
     stubCodexInferenceTransportEnv();
-    onTestFinished(() => vi.unstubAllEnvs());
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
   }
   const cwd = tempDirs.make("codex-assignment-rotation-");
   const params = createParams(path.join(cwd, "session.jsonl"), cwd);
@@ -441,6 +443,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
       } else if (reason === "tool-mismatch") {
         patch.dynamicTools = [
           {
+            type: "function",
             name: "changed_tool",
             description: "Changed tool",
             inputSchema: { type: "object", properties: {} },
