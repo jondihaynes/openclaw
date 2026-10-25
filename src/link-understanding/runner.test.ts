@@ -49,7 +49,7 @@ function captureLogs() {
   return log;
 }
 
-function mockGuardedFetch(body = "guarded content", finalUrl = "https://example.com/final") {
+function mockGuardedFetch(body = "page body", finalUrl = "https://example.com/final") {
   const release = vi.fn(async () => {});
   mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
     response: new Response(body),
@@ -59,7 +59,7 @@ function mockGuardedFetch(body = "guarded content", finalUrl = "https://example.
   return release;
 }
 
-function mockCommand(stdout = "summary") {
+function mockCommand(stdout = "summarized page") {
   mocks.runCommandWithTimeout.mockResolvedValueOnce({ code: 0, stdout });
 }
 
@@ -70,42 +70,25 @@ beforeEach(() => {
 
 it.each([
   [
-    "dedupes links and enforces maxLinks",
-    "https://a.example https://a.example https://b.test https://c.test",
+    "dedupes before limiting",
+    "https://a.test https://a.test https://b.test https://c.test",
     2,
-    ["https://a.example", "https://b.test"],
+    ["https://a.test", "https://b.test"],
   ],
+  ["ignores nested labels", "[notes [v2]](https://a.test)", undefined, []],
   [
-    "ignores markdown links whose label contains brackets",
-    "Check [my notes [v2]](https://internal.example/doc) for details",
+    "ignores multiline titles",
+    '[doc](https://a.test "one\ntwo") https://b.test',
     undefined,
-    [],
+    ["https://b.test"],
   ],
-  [
-    "ignores markdown links with title line breaks",
-    '[doc](https://docs.example "line one\nline two") https://bare.example',
-    undefined,
-    ["https://bare.example"],
-  ],
-  [
-    "does not strip a link with an escaped closing delimiter",
-    '[doc](https://docs.example "t\\")',
-    undefined,
-    ["https://docs.example"],
-  ],
+  ["keeps escaped delimiters", '[doc](https://a.test "t\\")', undefined, ["https://a.test"]],
   ["blocks 127.0.0.1", "http://127.0.0.1/test https://ok.test", undefined, ["https://ok.test"]],
-  [
-    "blocks private IPv4 embedded in an ISATAP URL",
-    "http://[2001:db8:1234::5efe:127.0.0.1]/secret",
-    undefined,
-    [],
-  ],
+  ["blocks ISATAP private IPv4", "http://[2001:db8:1234::5efe:127.0.0.1]/secret", undefined, []],
 ] as const)("%s before fetching", async (_name, message, maxLinks, expected) => {
-  mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
-    response: new Response("page body"),
-    finalUrl: "https://final.example",
-    release: async () => {},
-  }));
+  for (const url of expected) {
+    mockGuardedFetch("page body", url);
+  }
   await fixture(message, cfg({ command: "curl", args: ["{{LinkUrl}}"] }, { maxLinks })).run();
   expect(mocks.fetchWithSsrFGuard.mock.calls.map(([request]) => request.url)).toStrictEqual(
     expected,
@@ -136,12 +119,13 @@ it("applies shared media scope rules to link message context", async () => {
 it("fetches links through the SSRF guard before passing content to CLI stdin", async () => {
   const body = "synthetic private link context https://example.com/page";
   const log = captureLogs();
-  const release = mockGuardedFetch("page body", "https://example.com/final");
-  mockCommand("summarized page");
+  const release = mockGuardedFetch();
+  mockCommand();
 
-  const args = ["--source", "{{LinkUrl}}", "--context", "{{Body}}"];
-  const config = cfg({ type: "cli", command: "summarize", args });
-  const { context, controller, run } = fixture(body, config);
+  const { context, controller, run } = fixture(
+    body,
+    cfg({ command: "summarize", args: ["--source", "{{LinkUrl}}", "--context", "{{Body}}"] }),
+  );
   await run(controller.signal);
 
   expect(context.LinkUnderstanding).toEqual(["summarized page"]);
@@ -202,8 +186,8 @@ it.each([
   [{ agentText: "", BodyForAgent: "stale" }, ""],
   [{}, "transport envelope"],
 ] as const)("preserves prepared model text %j", async (text, expected) => {
-  mockGuardedFetch("page body");
-  mockCommand("summarized page");
+  mockGuardedFetch();
+  mockCommand();
   const { context, run } = fixture({
     Body: "transport envelope",
     RawBody: "see https://example.com/page",
@@ -227,11 +211,9 @@ it.each([
 
 it("does not run configured curl fetchers against attacker-controlled URLs", async () => {
   mockGuardedFetch("guarded page body");
-  const args = ["-s", "-L", "{{LinkUrl}}"];
-  const config = cfg({ type: "cli", command: "curl", args });
   const { context, run } = fixture(
     "see http://192.168.1.64.nip.io:8888/aws-iam-credentials",
-    config,
+    cfg({ command: "curl", args: ["-s", "-L", "{{LinkUrl}}"] }),
   );
   await run();
 
@@ -244,8 +226,8 @@ it.each([
   [15, 15000],
   [undefined, 9000],
 ] as const)("fetch timeout: global=%s, resolved=%s ms", async (timeoutSeconds, timeoutMs) => {
-  mockGuardedFetch("page body", "https://example.com/final");
-  mockCommand("summarized page");
+  mockGuardedFetch();
+  mockCommand();
 
   const { run } = fixture(
     undefined,
@@ -260,10 +242,7 @@ it.each([
   await run();
 
   expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-    expect.objectContaining({
-      timeoutMs,
-      url: "https://example.com/page",
-    }),
+    expect.objectContaining({ timeoutMs, url: "https://example.com/page" }),
   );
 });
 
@@ -278,7 +257,7 @@ it("skips pre-aborted work without changing inbound context", async () => {
 });
 
 it("passes the signal to each CLI entry during ordinary fallback", async () => {
-  mockGuardedFetch("page body", "https://example.com/final");
+  mockGuardedFetch();
   mockCommand("");
   mockCommand("second summary");
 

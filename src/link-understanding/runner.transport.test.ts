@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { createServer, type RequestListener } from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, beforeAll, beforeEach, expect, it, vi, type TestContext } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -40,10 +40,7 @@ vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
       const body = result.response.body;
       if (body) {
         const cancel = body.cancel.bind(body);
-        vi.spyOn(body, "cancel").mockImplementation(async (reason?: unknown) => {
-          mocks.bodyCancel(reason);
-          await cancel(reason);
-        });
+        vi.spyOn(body, "cancel").mockImplementation(mocks.bodyCancel.mockImplementation(cancel));
       }
       const release = result.release;
       result.release = async () => {
@@ -56,15 +53,11 @@ vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
 });
 vi.mock("../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process/exec.js")>();
-  return {
-    ...actual,
-    runCommandWithTimeout: mocks.runCommandWithTimeout.mockImplementation(
-      actual.runCommandWithTimeout,
-    ),
-  };
+  mocks.runCommandWithTimeout.mockImplementation(actual.runCommandWithTimeout);
+  return { ...actual, runCommandWithTimeout: mocks.runCommandWithTimeout };
 });
 
-async function serve(handler: RequestListener, onTestFinished: TestContext["onTestFinished"]) {
+async function serve(handler: RequestListener) {
   const server = createServer(handler);
   const base = await listenLoopback(server);
   onTestFinished(() => closeHttpServer(server));
@@ -96,7 +89,7 @@ it("cancels a non-OK response body before releasing its guarded transport", asyn
     response.writeHead(500, { "content-length": "1000000", "content-type": "text/plain" });
     // Leave the declared body unfinished so cleanup must actively cancel it.
     response.write("error");
-  }, t.onTestFinished);
+  });
   const { ctx, original, result } = startLink(`see ${base}/error`);
   await withinTest(result, t.signal);
   expect(ctx).toEqual(original);
@@ -106,7 +99,7 @@ it("cancels a non-OK response body before releasing its guarded transport", asyn
   expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
 });
 
-it("cancels a streaming response and preserves the unmodified inbound context", async (t) => {
+it("cancels a streaming response and preserves the unmodified inbound context", async () => {
   const requestStarted = deferred();
   const socketClosed = deferred();
   const requests: string[] = [];
@@ -116,7 +109,7 @@ it("cancels a streaming response and preserves the unmodified inbound context", 
     res.writeHead(200, { "content-type": "text/plain" });
     res.write("partial page");
     requestStarted.resolve();
-  }, t.onTestFinished);
+  });
   const { ctx, original, controller, result } = startLink(`${base}/first ${base}/second`, [
     "-e",
     "throw new Error('processor must not start')",
@@ -130,7 +123,7 @@ it("cancels a streaming response and preserves the unmodified inbound context", 
   expect(requests).toEqual(["/first"]);
 });
 
-it("skips a timed-out streaming link and processes the next link", async (t) => {
+it("skips a timed-out streaming link and processes the next link", async () => {
   const base = await serve((req, res) => {
     res.writeHead(200, { "content-type": "text/plain" });
     if (req.url === "/slow") {
@@ -138,19 +131,19 @@ it("skips a timed-out streaming link and processes the next link", async (t) => 
     } else {
       res.end("complete page");
     }
-  }, t.onTestFinished);
+  });
   const { ctx, result } = startLink(`${base}/slow ${base}/good`, undefined, 0.5);
   await result;
   expect(ctx.LinkUnderstanding).toEqual(["complete page"]);
 });
 
-it("fetches bare URLs in order while ignoring titled markdown links", async (t) => {
+it("fetches bare URLs in order while ignoring titled markdown links", async () => {
   const requests: string[] = [];
   const base = await serve((req, res) => {
     const requestPath = req.url ?? "";
     requests.push(requestPath);
     res.end(requestPath);
-  }, t.onTestFinished);
+  });
   const { ctx, result } = startLink(
     [
       `[quoted](${base}/quoted "Docs")`,
@@ -176,7 +169,7 @@ it("stops processor descendants after caller cancellation", async (t) => {
       `worker.once('message', () => { writeFileSync(${JSON.stringify(pidPath)}, String(worker.pid)); sendReceipt(${JSON.stringify(pidPath)}, 'ready'); })`,
       "process.stdin.resume()",
     ].join(";");
-    const base = await serve((_req, res) => res.end("page body"), t.onTestFinished);
+    const base = await serve((_req, res) => res.end("page body"));
     let workerPid: number | undefined;
     const { ctx, original, controller, result } = startLink(`${base}/page`, [
       "--input-type=module",
