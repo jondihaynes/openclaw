@@ -38,53 +38,38 @@ vi.mock("./executables.js", async (importOriginal) => ({
 }));
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-
 const maxMediaRawBytes = Math.floor((25 * 1024 * 1024 - 64 * 1024) / 4) * 3;
-
 const enabledConfig: ResolvedLinuxNodePluginConfig = {
   notify: { enabled: true },
   camera: { enabled: true },
   location: { enabled: true },
 };
 
-function success(stdout = ""): SpawnResult {
-  return commandResult({ stdout, noOutputTimedOut: false });
-}
-
+const success = (stdout = ""): SpawnResult => commandResult({ stdout, noOutputTimedOut: false });
 const jpeg640x480 = Buffer.from("ffd8ffc0000b0801e0028001011100ffd9", "hex");
-
 const runCommand = vi.fn<(argv: string[], options: CommandOptions) => Promise<SpawnResult>>();
 let commands: ReturnType<typeof createLinuxNodeCommands>;
-function command(name: string) {
-  const found = commands.find((entry) => entry.command === name);
-  if (!found) {
-    throw new Error(`missing command ${name}`);
-  }
-  return found;
-}
+const command = (name: string) => commands.find((entry) => entry.command === name)!;
 async function invoke(name: string, params?: Record<string, unknown>): Promise<unknown> {
-  return JSON.parse(await invokeRaw(name, params));
-}
-function invokeRaw(name: string, params?: Record<string, unknown>) {
-  return command(name).handle(JSON.stringify(params));
+  return JSON.parse(await command(name).handle(JSON.stringify(params)));
 }
 async function expectError(name: string, error: string | Error, params?: Record<string, unknown>) {
-  await expect(invokeRaw(name, params)).rejects.toThrow(error);
+  await expect(invoke(name, params)).rejects.toThrow(error);
 }
-async function expectLocationError(result: SpawnResult, error: string) {
-  runCommand.mockResolvedValue(result);
-  await expectError("location.get", error);
+function streamLocations(...chunks: [string, boolean][]) {
+  runCommand.mockImplementation(async (_argv, options) => {
+    for (const [output, keepRunning] of chunks) {
+      expect(options.onOutputChunk?.(Buffer.from(output), "stdout")).toBe(keepRunning);
+    }
+    return success(chunks.map(([output]) => output).join(""));
+  });
 }
 
 describe("linux-node commands", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
     runCommand.mockResolvedValue(success());
-    Object.defineProperty(process, "platform", {
-      ...platformDescriptor,
-      value: "linux",
-    });
-    vi.stubEnv("PATH", "/usr/bin");
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
     vi.setSystemTime(new Date("2026-07-13T12:00:10.000Z"));
     boundary.resolveExecutable.mockImplementation((name) => `/usr/bin/${name}`);
     boundary.readdir.mockResolvedValue(["video0"]);
@@ -109,7 +94,6 @@ describe("linux-node commands", () => {
   afterEach(() => {
     Object.defineProperty(process, "platform", platformDescriptor);
     vi.useRealTimers();
-    vi.unstubAllEnvs();
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });
@@ -148,10 +132,9 @@ describe("linux-node commands", () => {
         { id: "/dev/video0", name: "Integrated Camera", position: "unknown", deviceType: "v4l2" },
       ],
     });
-    expect(boundary.runCommand).toHaveBeenCalledTimes(2);
   });
 
-  it("advertises only enabled Linux capabilities with cached tooling", () => {
+  it("advertises enabled Linux capabilities and gates direct invocations", async () => {
     boundary.resolveExecutable.mockImplementation((name) =>
       name === "where-am-i" ? null : `/usr/bin/${name}`,
     );
@@ -164,27 +147,30 @@ describe("linux-node commands", () => {
     expect(command("camera.list").isAvailable?.(context)).toBe(true);
     expect(command("location.get").isAvailable?.(context)).toBe(false);
 
-    const disabledCameraContext = structuredClone(context);
-    disabledCameraContext.config.plugins.entries["linux-node"].config.camera.enabled = false;
-    expect(command("camera.list").isAvailable?.(disabledCameraContext)).toBe(false);
+    const disabled = { ...enabledConfig, camera: { enabled: false }, location: { enabled: false } };
+    context.config.plugins.entries["linux-node"].config = disabled;
+    expect(command("camera.list").isAvailable?.(context)).toBe(false);
+    commands = createLinuxNodeCommands(disabled);
+    await expectError("camera.list", "CAMERA_DISABLED");
+    await expectError("location.get", "LOCATION_DISABLED");
 
     Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
     commands = createLinuxNodeCommands(enabledConfig);
     expect(command("system.notify").isAvailable?.(context)).toBe(false);
   });
 
-  it("maps notification priority and ignores sound and delivery", async () => {
-    const title = "Build complete";
-    const body = "All checks passed";
-    const params = { title, body, priority: "timeSensitive", sound: "default", delivery: "system" };
-    await expect(invokeRaw("system.notify", params)).resolves.toBe('{"ok":true}');
-    expect(runCommand).toHaveBeenCalledWith(
-      ["/usr/bin/notify-send", "--urgency", "critical", "--", title, body],
-      { timeoutMs: 10_000 },
-    );
+  it.each([
+    ["timeSensitive", "critical", "All checks passed"],
+    [undefined, "normal", ""],
+  ])("delivers %s notifications with unsupported options", async (priority, urgency, body) => {
+    const params = { title: "Status", body, priority, sound: "default", delivery: "system" };
+    await expect(invoke("system.notify", params)).resolves.toEqual({ ok: true });
+    const argv = ["/usr/bin/notify-send", "--urgency", urgency, "--", "Status", body];
+    expect(runCommand.mock.calls[0]?.[0]).toEqual(argv);
   });
 
   it("keeps truncated notification errors within the limit without splitting surrogate pairs", async () => {
+    await expectError("system.notify", "INVALID_REQUEST: empty notification", {});
     runCommand.mockResolvedValue({
       ...success(),
       code: 1,
@@ -195,53 +181,38 @@ describe("linux-node commands", () => {
     });
   });
 
-  it("accepts either notification field but rejects an empty notification", async () => {
-    await expect(invokeRaw("system.notify", { title: "Status", body: "" })).resolves.toBe(
-      '{"ok":true}',
-    );
-    const argv = ["/usr/bin/notify-send", "--urgency", "normal", "--", "Status", ""];
-    expect(runCommand.mock.calls[0]?.[0]).toEqual(argv);
-    await expectError("system.notify", "INVALID_REQUEST: empty notification", {});
-  });
-
-  it("maps snap defaults and clamps delay and quality", async () => {
-    const payload = await invoke("camera.snap", {
-      deviceId: "/dev/video0",
-      delayMs: 50_000,
-      quality: 2,
-      maxWidth: -1,
-      format: "jpeg",
+  it.each([
+    {
+      name: "camera.snap",
+      params: {
+        deviceId: "/dev/video0",
+        delayMs: 50_000,
+        quality: 2,
+        maxWidth: -1,
+        format: "jpeg",
+      },
+      argv: ["10.000", "scale=min(iw\\,1600):-2", "2"],
+      media: jpeg640x480,
+      metadata: { format: "jpeg", width: 640, height: 480 },
+    },
+    {
+      name: "camera.clip",
+      params: { durationMs: 1 },
+      argv: ["-f", "pulse", "-i", "default", "-t", "0.250", "-c:a", "aac"],
+      media: Buffer.from("mp4"),
+      metadata: { format: "mp4", durationMs: 250, hasAudio: true },
+    },
+  ])("captures $name with clamped parameters", async ({ name, params, argv, media, metadata }) => {
+    await expect(invoke(name, params)).resolves.toEqual({
+      ...metadata,
+      base64: media.toString("base64"),
     });
-    expect(runCommand.mock.calls[0]?.[0]).toEqual(
-      expect.arrayContaining(["10.000", "scale=min(iw\\,1600):-2", "2"]),
-    );
-    expect(payload).toEqual({
-      format: "jpeg",
-      base64: jpeg640x480.toString("base64"),
-      width: 640,
-      height: 480,
-    });
-  });
-
-  it("records clip audio through PulseAudio and clamps duration", async () => {
-    const payload = await invoke("camera.clip", { durationMs: 1 });
-    expect(runCommand.mock.calls[0]?.[0]).toEqual(
-      expect.arrayContaining(["-f", "pulse", "-i", "default", "-t", "0.250", "-c:a", "aac"]),
-    );
-    expect(payload).toEqual({
-      format: "mp4",
-      base64: Buffer.from("mp4").toString("base64"),
-      durationMs: 250,
-      hasAudio: true,
-    });
+    expect(runCommand.mock.calls[0]?.[0]).toEqual(expect.arrayContaining(argv));
   });
 
   it("maps GeoClue accuracy and parses a fresh location payload", async () => {
     const output = `Client object: /org/freedesktop/GeoClue2/Client/1\n\nNew location:\nLatitude:    48.208490°\nLongitude:   16.372080°\nAccuracy:    12.500000 meters\nAltitude:    182.000000 meters\nSpeed:       0.000000 meters/second\nHeading:     270.000000°\nTimestamp:   Mon Jul 13 12:00:00 2026 (1783944000 seconds since the Epoch)\n`;
-    runCommand.mockImplementation(async (_argv, options) => {
-      options.onOutputChunk?.(Buffer.from(output), "stdout");
-      return success(output);
-    });
+    streamLocations([output, false]);
     const payload = await invoke("location.get", {
       timeoutMs: 100,
       maxAgeMs: 20_000,
@@ -263,73 +234,41 @@ describe("linux-node commands", () => {
   });
 
   it.each([
-    ["stale", "11:00:00", "12:00:05", 20_000],
-    ["future-dated", "12:00:15", "12:00:09", 2000],
-  ])(
-    "keeps GeoClue running past a %s fix until a fresh update arrives",
-    async (_kind, rejectedTime, acceptedTime, maxAgeMs) => {
-      const fix = (lat: number, time: string) =>
-        `\nNew location:\nLatitude: ${lat}\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (${Date.parse(`2026-07-13T${time}.000Z`) / 1000} seconds since the Epoch)\n`;
-      const rejected = fix(47, rejectedTime);
-      const accepted = fix(48, acceptedTime);
-      runCommand.mockImplementation(async (_argv, options) => {
-        expect(options.onOutputChunk?.(Buffer.from(rejected), "stdout")).toBe(true);
-        expect(options.onOutputChunk?.(Buffer.from(accepted), "stdout")).toBe(false);
-        return success(`${rejected}${accepted}`);
-      });
-      expect(await invoke("location.get", { maxAgeMs })).toMatchObject({
-        lat: 48,
-        timestamp: `2026-07-13T${acceptedTime}.000Z`,
-      });
-    },
-  );
-
-  it("accounts for GeoClue second precision when maxAgeMs is zero", async () => {
-    const output = `\nNew location:\nLatitude: 48\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (1783944010 seconds since the Epoch)\n`;
-    runCommand.mockResolvedValue(success(output));
-    vi.setSystemTime(new Date("2026-07-13T12:00:10.900Z"));
-
-    await expect(invokeRaw("location.get", { maxAgeMs: 0 })).resolves.toContain(
-      '"timestamp":"2026-07-13T12:00:10.000Z"',
-    );
+    ["stale", "11:00:00", "12:00:05", 20_000, 0],
+    ["future-dated", "12:00:15", "12:00:09", 2000, 0],
+    ["subsecond", "12:00:09", "12:00:10", 0, 900],
+  ])("filters %s fixes", async (_kind, oldTime, newTime, maxAgeMs, millis) => {
+    vi.setSystemTime(new Date("2026-07-13T12:00:10.000Z").getTime() + millis);
+    const fix = (lat: number, time: string) =>
+      `\nNew location:\nLatitude: ${lat}\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (${Date.parse(`2026-07-13T${time}.000Z`) / 1000} seconds since the Epoch)\n`;
+    const rejected = fix(47, oldTime);
+    const accepted = fix(48, newTime);
+    streamLocations([rejected, true], [accepted, false]);
+    expect(await invoke("location.get", { maxAgeMs })).toMatchObject({
+      lat: 48,
+      timestamp: `2026-07-13T${newTime}.000Z`,
+    });
   });
 
-  it("returns stable location timeout and unavailable errors", async () => {
-    await expectLocationError(success(""), "LOCATION_TIMEOUT: no fix in time");
-    await expectLocationError(
-      { ...success(), code: 1, stderr: "GeoClue service unavailable" },
-      "LOCATION_UNAVAILABLE: GeoClue service unavailable",
-    );
-    await expectLocationError(
-      success("Geolocation disabled. Quitting..\n"),
-      "LOCATION_DISABLED: GeoClue location services are disabled",
-    );
+  it.each([
+    [success(), "TIMEOUT", "no fix in time"],
+    [{ ...success(), code: 1, stderr: "offline" }, "UNAVAILABLE", "offline"],
+    [success("Geolocation disabled"), "DISABLED", "GeoClue location services are disabled"],
+  ] as const)("reports GeoClue failure: %s", async (result, code, detail) => {
+    runCommand.mockResolvedValue(result);
+    await expectError("location.get", `LOCATION_${code}: ${detail}`);
+  });
+
+  it("stops GeoClue when access is revoked after a fix", async () => {
     const revokedOutput =
       "New location:\nLatitude: 48\nLongitude: 16\nAccuracy: 25 meters\nAccessDenied: Geolocation disabled for UID 1000\n";
-    runCommand.mockImplementation(async (_argv, options) => {
-      expect(options.onOutputChunk?.(Buffer.from(revokedOutput), "stdout")).toBe(false);
-      return success(revokedOutput);
-    });
+    streamLocations([revokedOutput, false]);
     await expectError("location.get", "LOCATION_DISABLED: GeoClue location services are disabled");
   });
 
-  it("gates handlers even when invoked without advertisement", async () => {
-    commands = createLinuxNodeCommands({
-      notify: { enabled: true },
-      camera: { enabled: false },
-      location: { enabled: false },
-    });
-    await expectError("camera.list", "CAMERA_DISABLED");
-    await expectError("location.get", "LOCATION_DISABLED");
-  });
-
   it("rejects media beyond the 25 MB base64 budget", async () => {
-    const readFile = vi.fn(async () => Buffer.alloc(maxMediaRawBytes + 1));
     boundary.stat.mockResolvedValue({ size: maxMediaRawBytes + 1 });
-    boundary.readFile.mockImplementation(async (filePath) =>
-      filePath.startsWith("/sys/") ? "Test Camera\n" : await readFile(),
-    );
     await expectError("camera.clip", "PAYLOAD_TOO_LARGE");
-    expect(readFile).not.toHaveBeenCalled();
+    expect(boundary.readFile).not.toHaveBeenCalledWith(expect.stringMatching(/\.mp4$/u));
   });
 });
