@@ -1,29 +1,20 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 import { isValidElevenLabsVoiceId } from "./shared.js";
 import { buildElevenLabsSpeechProvider } from "./speech-provider-factory.js";
 
-const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const fetchMock = vi.hoisted(() =>
+  vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
+);
 
 vi.mock("./config-api.js", () => ({
   resolveElevenLabsApiKeyWithProfileFallback: () => null,
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: async (params: {
-    url: string;
-    init?: RequestInit;
-    timeoutMs?: number;
-  }): Promise<{ response: Response; release: () => Promise<void> }> => {
-    fetchWithSsrFGuardMock(params);
-    return {
-      response: await globalThis.fetch(params.url, params.init),
-      release: vi.fn(async () => {}),
-    };
-  },
+  fetchWithSsrFGuard: fetchMock,
   ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
@@ -38,26 +29,24 @@ const request = {
 };
 
 describe("elevenlabs speech provider", () => {
-  const originalFetch = globalThis.fetch;
-  const fetchMock = vi.fn<typeof fetch>();
   const provider = buildElevenLabsSpeechProvider({ formatErrorMessage });
+  function mockResponse(response: Response) {
+    fetchMock.mockResolvedValue({
+      response,
+      finalUrl: "https://api.elevenlabs.io",
+      release: async () => {},
+    });
+  }
 
   function sentRequest() {
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [input, init] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs request");
-    if (typeof init?.body !== "string") {
-      throw new Error("expected string request body");
-    }
-    const body: unknown = JSON.parse(init.body);
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      throw new Error("expected ElevenLabs request body");
-    }
-    return { url: new URL(resolveRequestUrl(input)), body };
+    const [{ url, init }] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs request");
+    const body: unknown = JSON.parse(String(init?.body));
+    return { url: new URL(url), body };
   }
 
   beforeEach(() => {
-    fetchMock.mockReset().mockResolvedValue(new Response(new Uint8Array([1, 2, 3])));
-    globalThis.fetch = fetchMock;
+    fetchMock.mockReset();
+    mockResponse(new Response(new Uint8Array([1, 2, 3])));
   });
 
   afterAll(() => {
@@ -65,12 +54,7 @@ describe("elevenlabs speech provider", () => {
     vi.resetModules();
   });
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    fetchWithSsrFGuardMock.mockClear();
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
   it.each([
     ["stability", "0", true, { overrides: { voiceSettings: { style: 0.25, stability: 0 } } }],
@@ -92,11 +76,9 @@ describe("elevenlabs speech provider", () => {
   );
 
   it("forwards the core-resolved voice-list timeout", async () => {
-    fetchMock.mockResolvedValue(Response.json({ voices: [] }));
+    mockResponse(Response.json({ voices: [] }));
     await provider.listVoices?.({ providerConfig: request.providerConfig, timeoutMs: 30_000 });
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 30_000 }),
-    );
+    expect(fetchMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 30_000 }));
   });
 
   it("rejects blank credentials across discovery and synthesis before requests", async () => {
@@ -116,16 +98,28 @@ describe("elevenlabs speech provider", () => {
     ]) {
       await expect(synthesize?.(blankRequest)).rejects.toThrow("ElevenLabs API key missing");
     }
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("maps deprecated ElevenLabs TTS model IDs in overrides", async () => {
+  it("normalizes model and voice-setting overrides before telephony synthesis", async () => {
     await provider.synthesizeTelephony?.({
       ...request,
-      providerConfig: { apiKey: "xi-test", modelId: "eleven_multilingual_v2" },
-      providerOverrides: { modelId: "eleven_turbo_v2_5" },
+      providerConfig: {
+        apiKey: "xi-test",
+        modelId: "eleven_multilingual_v2",
+        voiceSettings: { stability: -1, similarityBoost: 2, style: Number.NaN, speed: 3 },
+      },
+      providerOverrides: { modelId: "eleven_turbo_v2_5", voiceSettings: { speed: 0.1 } },
     });
-    expect(sentRequest().body).toHaveProperty("model_id", "eleven_flash_v2_5");
+    const { body } = sentRequest();
+    expect(body).toHaveProperty("model_id", "eleven_flash_v2_5");
+    expect(body).toHaveProperty("voice_settings", {
+      stability: 0.5,
+      similarity_boost: 0.75,
+      style: 0,
+      use_speaker_boost: true,
+      speed: 1,
+    });
   });
 
   it("validates ElevenLabs voice ID length and character rules", () => {
@@ -142,63 +136,28 @@ describe("elevenlabs speech provider", () => {
     }
   });
 
-  it("drops out-of-range voice settings before synthesis", async () => {
-    await provider.synthesizeTelephony?.({
-      ...request,
-      providerConfig: {
-        apiKey: "xi-test",
-        voiceSettings: { stability: -1, similarityBoost: 2, style: Number.NaN, speed: 3 },
-      },
-      providerOverrides: { voiceSettings: { speed: 0.1 } },
-    });
-    expect(sentRequest().body).toHaveProperty("voice_settings", {
-      stability: 0.5,
-      similarity_boost: 0.75,
-      style: 0,
-      use_speaker_boost: true,
-      speed: 1,
-    });
-  });
-
-  it("drops malformed latency tier overrides before synthesis", async () => {
-    await provider.synthesize({
-      ...request,
-      target: "audio-file",
-      providerOverrides: { latencyTier: 2.5 },
-    });
-    expect(sentRequest().url.searchParams.has("optimize_streaming_latency")).toBe(false);
-  });
-
-  it("returns truthful future-format metadata for a voice-note override", async () => {
+  it("returns future-format metadata and drops invalid latency for a voice-note override", async () => {
     const expected = { outputFormat: "future_123", fileExtension: ".bin", voiceCompatible: false };
     const result = await provider.synthesize({
       ...request,
-      providerOverrides: { outputFormat: expected.outputFormat },
+      providerOverrides: { outputFormat: expected.outputFormat, latencyTier: 2.5 },
     });
     expect(sentRequest().url.searchParams.get("output_format")).toBe(expected.outputFormat);
+    expect(sentRequest().url.searchParams.has("optimize_streaming_latency")).toBe(false);
     expect(result).toEqual({ audioBuffer: Buffer.from([1, 2, 3]), ...expected });
   });
 
   it("returns truthful stream metadata for an output override and releases the stream once", async () => {
     const cancel = vi.fn();
-    fetchMock.mockResolvedValue(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array([1, 2, 3]));
-          },
-          cancel,
-        }),
-        { headers: { "content-type": "audio/mpeg" } },
-      ),
-    );
-    const result = expectDefined(
-      await provider.streamSynthesize?.({
-        ...request,
-        providerOverrides: { outputFormat: "pcm_44100" },
-      }),
-      "streamSynthesize result",
-    );
+    const stream = new ReadableStream<Uint8Array>({ cancel });
+    mockResponse(new Response(stream, { headers: { "content-type": "audio/mpeg" } }));
+    const result = await expectDefined(
+      provider.streamSynthesize,
+      "streamSynthesize",
+    )({
+      ...request,
+      providerOverrides: { outputFormat: "pcm_44100" },
+    });
     expect(sentRequest().url.searchParams.get("output_format")).toBe("pcm_44100");
     expect(result).toMatchObject({
       outputFormat: "pcm_44100",
