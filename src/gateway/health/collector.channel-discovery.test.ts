@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as ingressHealth from "../../channels/message/ingress-queue-health.js";
 import * as packageState from "../../channels/plugins/package-state-probes.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -23,7 +23,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createRecordedAccountSnapshots } from "../server-methods/channels.status.test-helpers.js";
-import { collectGatewayHealthSnapshot } from "./collector.js";
+import { collectGatewayHealthSnapshot as collectHealth } from "./collector.js";
 
 let state: OpenClawTestState | undefined;
 const agents: OpenClawConfig["agents"] = {
@@ -31,6 +31,12 @@ const agents: OpenClawConfig["agents"] = {
   defaults: { systemAgent: { agentId: "main" } },
   entries: { main: {} },
 };
+
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "health-discovery" });
+  vi.spyOn(configRuntime, "getRuntimeConfig").mockReturnValue({ agents });
+  setActivePluginRegistry(createTestRegistry([]));
+});
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -41,12 +47,11 @@ afterEach(async () => {
 });
 
 it("includes admitted accounts without operational hooks in public health", async () => {
-  state = await createOpenClawTestState({ label: "health-admitted-accounts" });
   const config: OpenClawConfig = {
     agents,
     bindings: [{ agentId: "main", match: { channel: "admitted-chat", accountId: "bound" } }],
   };
-  vi.spyOn(configRuntime, "getRuntimeConfig").mockReturnValue(config);
+  vi.mocked(configRuntime.getRuntimeConfig).mockReturnValue(config);
   const resolveAccount = vi.fn((_cfg: OpenClawConfig, accountId?: string | null) => {
     if (accountId !== "primary" && accountId !== "bound") {
       throw new Error("admitted account has no current operational configuration");
@@ -82,7 +87,7 @@ it("includes admitted accounts without operational hooks in public health", asyn
     terminalDisconnect: true,
     lastError: "account requires login",
   };
-  const snapshot = await collectGatewayHealthSnapshot({
+  const snapshot = await collectHealth({
     audience: "public",
     probe: true,
     runtimeSnapshot: {
@@ -94,8 +99,8 @@ it("includes admitted accounts without operational hooks in public health", asyn
             audience:
               "https://audience-user:audience-password@audience.example.test/?token=audience-token",
           },
-          retrying: { ...retrying },
-          terminal: { ...terminal },
+          retrying,
+          terminal,
         },
       },
     },
@@ -136,7 +141,6 @@ it("includes admitted accounts without operational hooks in public health", asyn
 });
 
 it("uses admitted channels and configured failures without credential discovery", async () => {
-  state = await createOpenClawTestState({ label: "health-channel-discovery" });
   const config: OpenClawConfig = {
     agents: { ownership: "explicit", entries: { main: {} } },
     channels: {
@@ -145,7 +149,7 @@ it("uses admitted channels and configured failures without credential discovery"
       },
     },
   };
-  vi.spyOn(configRuntime, "getRuntimeConfig").mockReturnValue(config);
+  vi.mocked(configRuntime.getRuntimeConfig).mockReturnValue(config);
   setGatewayPluginMetadataSnapshot(
     createPluginMetadataSnapshot({
       config,
@@ -176,8 +180,6 @@ it("uses admitted channels and configured failures without credential discovery"
   registry.plugins.push(
     createPluginRecord({
       id: "failed-owner",
-      enabled: true,
-      activated: true,
       status: "error",
       failurePhase: "load",
       channelIds: ["failed-chat"],
@@ -194,7 +196,7 @@ it("uses admitted channels and configured failures without credential discovery"
     .mockImplementation(() => {
       throw new Error("health attempted dormant credential discovery");
     });
-  const snapshot = await collectGatewayHealthSnapshot({
+  const snapshot = await collectHealth({
     audience: "admin",
     probe: true,
     runtimeSnapshot: { channels: {}, channelAccounts: {} },
@@ -213,17 +215,11 @@ it("uses admitted channels and configured failures without credential discovery"
     disabled: { enabled: false, configured: true, running: false, lifecycle: "blocked" },
   });
   expect(snapshot.plugins?.errors).toMatchObject([
-    {
-      id: "failed-owner",
-      error: expect.stringContaining("failed to load"),
-    },
+    { id: "failed-owner", error: expect.stringContaining("failed to load") },
   ]);
 });
 
 it("preserves the health snapshot when outbound admission capture fails", async () => {
-  state = await createOpenClawTestState({ label: "health-queue-admission" });
-  vi.spyOn(configRuntime, "getRuntimeConfig").mockReturnValue({ agents });
-  setActivePluginRegistry(createTestRegistry([]));
   const capture = vi
     .spyOn(deliveryQueueState, "captureDeliveryQueueStateContext")
     .mockImplementation(() => {
@@ -235,7 +231,7 @@ it("preserves the health snapshot when outbound admission capture fails", async 
     failed,
     pressure: [],
   });
-  const pending = collectGatewayHealthSnapshot({ audience: "admin", probe: false });
+  const pending = collectHealth({ audience: "admin", probe: false });
   expect(capture).toHaveBeenCalledTimes(1);
   expect(await pending).toMatchObject({
     channels: {},
@@ -246,18 +242,12 @@ it("preserves the health snapshot when outbound admission capture fails", async 
 });
 
 it("surfaces a retry-floor ingress lane with 55 blocked followers", async () => {
-  state = await createOpenClawTestState({ label: "health-ingress-pressure" });
-  vi.spyOn(configRuntime, "getRuntimeConfig").mockReturnValue({ agents });
-  setActivePluginRegistry(createTestRegistry([]));
   const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");
   const { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } =
     await import("../../channels/message/ingress-retry-policy.js");
   const now = Date.now();
   const account = { channelId: "telegram", accountId: "ops" };
-  const ingressQueue = createChannelIngressQueue<{ text: string }>({
-    ...account,
-    now: () => now,
-  });
+  const ingressQueue = createChannelIngressQueue<{ text: string }>({ ...account, now: () => now });
   const enqueue = (id: string, text: string, age: number, laneKey = "private-lane") =>
     ingressQueue.enqueue(id, { text }, { laneKey, receivedAt: now - age });
   const claim = async (id: string) =>
@@ -280,7 +270,7 @@ it("surfaces a retry-floor ingress lane with 55 blocked followers", async () => 
   await enqueue("fresh-claim-private", "fresh claim", 10_000, "fresh-private-lane");
   await claim("fresh-claim-private");
 
-  const snap = await collectGatewayHealthSnapshot({ audience: "admin", probe: false });
+  const snap = await collectHealth({ audience: "admin", probe: false });
   expect(snap.deliveryQueues).toEqual({
     failed: [],
     ingressPressure: [
