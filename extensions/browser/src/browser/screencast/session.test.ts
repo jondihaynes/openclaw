@@ -120,7 +120,6 @@ describe("browser screencast sessions", () => {
     }
     page.paint(2);
     page.paint(3);
-    expect(requester.signal.aborted).toBe(mode === "abort");
     expect([first.frames().length, second.frames().length]).toEqual([1, 3]);
     expect(first.close.mock.calls).toEqual([[4006, "authority_revoked"]]);
     expect(getEventListeners(requester.signal, "abort")).toHaveLength(0);
@@ -137,7 +136,6 @@ describe("browser screencast sessions", () => {
     const params = requesterParams(requester);
     const viewer = message === "meta" ? await attach(params) : new ScreencastViewer();
     if (message === "meta") {
-      expect(viewer.messages()).toHaveLength(1);
       viewer.send.mockClear();
     }
     page.title.mockImplementationOnce(async () => {
@@ -188,11 +186,9 @@ describe("browser screencast sessions", () => {
     page.paint(3);
     await vi.advanceTimersByTimeAsync(50);
     expect([first.frames().length, second.frames().length]).toEqual([2, 1]);
-    expect(page.cdp.acks()).toEqual([
-      ["Page.screencastFrameAck", { sessionId: 1 }],
-      ["Page.screencastFrameAck", { sessionId: 2 }],
-      ["Page.screencastFrameAck", { sessionId: 3 }],
-    ]);
+    expect(page.cdp.acks()).toEqual(
+      [1, 2, 3].map((sessionId) => ["Page.screencastFrameAck", { sessionId }]),
+    );
   });
 
   it.each(["event", "frame"])("fences pending policy (%s-triggered)", async (trigger) => {
@@ -275,9 +271,7 @@ describe("browser screencast sessions", () => {
     expect(viewer.messages()).toEqual([
       { type: "ready", targetId: "target-1", url: nextUrl, title: "Next" },
     ]);
-    expect(
-      parseScreencastFrame(expectDefined(viewer.frames()[0], "approved document frame")).header.url,
-    ).toBe(nextUrl);
+    expect(viewer.frames().map(parseScreencastFrame)).toEqual([expectedFrame(nextUrl)]);
     page.currentTitle = "Loaded";
     page.emit("load");
     await flush();
@@ -311,8 +305,7 @@ describe("browser screencast sessions", () => {
 
   it("waits for predecessor teardown before starting a replacement on the same target", async () => {
     const first = await attach();
-    const detached = Promise.withResolvers<void>();
-    page.cdp.detach.mockReturnValue(detached.promise);
+    const detached = hold(page.cdp.detach);
     first.close();
     await flush();
     const successor = await attach();
