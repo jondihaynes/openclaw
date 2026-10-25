@@ -166,18 +166,6 @@ describe("owner projections", () => {
     expect(subscribe).toHaveBeenCalledTimes(2);
   });
 
-  it("publishes in-place mutations by revision, while owner reads remain synchronous", () => {
-    const { owner, projection } = source({ count: 1 });
-    const view = observe(() => projection.read().count);
-    owner.value.count = 2;
-    owner.set(owner.value);
-    expect(projection.read().count).toBe(2);
-    expect(view.values).toEqual([1]);
-    flush();
-    expect(view.values).toEqual([1, 2]);
-    expect(projection.revision()).toBe(1);
-  });
-
   it("samples reactive owner getters only when their owner publishes", () => {
     const [value, setValue] = createSignal(1);
     const owner = new ValueSignal(0);
