@@ -219,6 +219,66 @@ const fixture = {
   dataPage: "catalog" as const,
 };
 
+function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
+  return {
+    ...fixture,
+    id: roundTripMs ? "data-agent-selection-100ms" : "data-agent-selection",
+    route: pathForAgentPanel("main", "overview"),
+    expected: "The hydrated 300-agent selector reopens and selects the final agent.",
+    rowSelector: "[data-agent-option]",
+    createRequestHandlers: () => ({
+      "agent.identity.get": async (params) => {
+        // Simulate only this RPC's 100 ms round trip, not asset or Internet latency.
+        if (roundTripMs) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, roundTripMs);
+          });
+        }
+        const { agentId } = params as { agentId: string };
+        return {
+          agentId,
+          name: agentId === "main" ? "OpenClaw" : `Data agent ${agentId.slice(-4)}`,
+          avatar: "",
+          avatarStatus: "none",
+          emoji: "🧪",
+        };
+      },
+    }),
+    prepare: async (page) => {
+      const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
+      await trigger.click();
+      await countRows(page, "[data-agent-option]", agentCount);
+      // Each rendered emoji acknowledges that agent's initial identity reply.
+      await countRows(
+        page,
+        '[data-agent-option] .identity-avatar__text[data-avatar="🧪"]',
+        agentCount,
+      );
+      await page.keyboard.press("Escape");
+      await page.locator(".agent-select__menu").waitFor({ state: "hidden" });
+      await frames(page);
+    },
+    run: async (page) => {
+      const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
+      await trigger.click();
+      await countRows(page, "[data-agent-option]", agentCount);
+      await page.locator('[data-agent-option][value="data-agent-0299"]').click();
+      await page.waitForFunction(() =>
+        document
+          .querySelector(".settings-sidebar__agent .agent-select__trigger")
+          ?.textContent?.includes("Data agent 0299"),
+      );
+      await trigger.locator('.identity-avatar__text[data-avatar="🧪"]').waitFor();
+      await frames(page);
+      return {
+        fixtureAgents: agentCount,
+        selectedFinalAgent: true,
+        identityRoundTripMs: roundTripMs,
+      };
+    },
+  };
+}
+
 export const dataCatalogScenarios: readonly InteractionScenario[] = [
   {
     ...fixture,
@@ -339,29 +399,8 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
       return { fixturePlugins: inventorySize, matchingPlugins: 100 };
     },
   },
-  {
-    ...fixture,
-    id: "data-agent-selection",
-    route: pathForAgentPanel("main", "overview"),
-    expected: "The 300-agent selector opens and selects the final agent.",
-    rowSelector: "[data-agent-option]",
-    prepare: async (page) => {
-      await page.locator(".settings-sidebar__agent .agent-select__trigger").waitFor();
-    },
-    run: async (page) => {
-      const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
-      await trigger.click();
-      await countRows(page, "[data-agent-option]", agentCount);
-      await page.locator('[data-agent-option][value="data-agent-0299"]').click();
-      await page.waitForFunction(() =>
-        document
-          .querySelector(".settings-sidebar__agent .agent-select__trigger")
-          ?.textContent?.includes("Data agent 0299"),
-      );
-      await frames(page);
-      return { fixtureAgents: agentCount, selectedFinalAgent: true };
-    },
-  },
+  agentSelectionScenario(0),
+  agentSelectionScenario(100),
   {
     ...fixture,
     id: "data-agent-skills-render",

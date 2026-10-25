@@ -78,7 +78,8 @@ the tool report has 40 groups of 25 tools with effective-access diagnostics.
 | `data-plugins-scroll`        | Scroll the final installed plugin into view.                                  |
 | `data-catalog-load-more`     | Append the final 100-item cursor page to 900 existing cards.                  |
 | `data-catalog-search`        | Search through the debounced Gateway query; assert 100 results.               |
-| `data-agent-selection`       | Open the 300-agent selector and select its final agent.                       |
+| `data-agent-selection`       | Reopen the hydrated 300-agent selector and select its final agent.            |
+| `data-agent-selection-100ms` | Repeat hydrated selection with 100 ms simulated identity-RPC round trips.     |
 | `data-agent-skills-render`   | Reveal the Skills panel; assert 1,000 skill rows.                             |
 | `data-agent-skills-filter`   | Filter to the final skill; assert one row.                                    |
 | `data-agent-skills-refresh`  | Refresh skills; await the report and preserved rows.                          |
@@ -140,8 +141,10 @@ per-folder cap); warm tree cases open all folders before measuring the action.
 
 These are renderer measurements, not real-Gateway, filesystem, provider, network
 throughput, or backend-query benchmarks. No model or external service is called.
-No simulated network delay is installed: the candidate optimizations affect local
-rendering, not transport shape. Gateway callbacks use the existing mock transport;
+Agent selection waits for all 300 identity-only emoji avatars before measuring
+reopening and selection. Its two variants use local responses or a 100 ms delay
+on each identity RPC; this is not a whole-network latency simulation. Other
+scenarios install no network delay. Gateway callbacks use the existing mock transport;
 Usage filtering/paging and session-window selection reuse production owners.
 
 The workload does not invent sort controls on pages without them. Plugin-provided
