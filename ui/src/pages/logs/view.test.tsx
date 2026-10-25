@@ -65,7 +65,7 @@ describe("LogsView", () => {
       .spyOn(Intl, "DateTimeFormat")
       .mockImplementation(function (locales, options) {
         const formatter = new NativeDateTimeFormat(locales, { ...options, timeZone });
-        const format = formatter.format;
+        const format = formatter.format.bind(formatter);
         Object.defineProperty(formatter, "format", {
           value: (value?: number | Date) => {
             formatCalls(value);

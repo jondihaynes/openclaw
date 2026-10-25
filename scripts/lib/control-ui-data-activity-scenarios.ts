@@ -1,9 +1,9 @@
 import type { Page } from "playwright";
 import { pathForRoute } from "../../ui/src/app-route-paths.ts";
-import {
-  prepareInteractionNavigation,
-  type InteractionFixtureOverrides,
-  type InteractionScenario,
+import { prepareInteractionNavigation } from "./control-ui-interaction-navigation.ts";
+import type {
+  InteractionFixtureOverrides,
+  InteractionScenario,
 } from "./control-ui-interaction-scenarios.ts";
 
 const population = 1_000;

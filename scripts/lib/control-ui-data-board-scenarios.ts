@@ -4,11 +4,11 @@ import { openChatSidePanelType } from "../../ui/src/e2e/chat-side-panel.test-sup
 import { openSidebarPages } from "../../ui/src/e2e/sidebar-customization.test-support.ts";
 import type { BoardSnapshot } from "../../ui/src/lib/board/types.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import {
-  openInteractionPanel,
-  type InteractionFixtureOverrides,
-  type InteractionSandbox,
-  type InteractionScenario,
+import { openInteractionPanel } from "./control-ui-interaction-navigation.ts";
+import type {
+  InteractionFixtureOverrides,
+  InteractionSandbox,
+  InteractionScenario,
 } from "./control-ui-interaction-scenarios.ts";
 
 const sessionKey = "agent:main:interaction-a";

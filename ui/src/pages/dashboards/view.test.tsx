@@ -39,7 +39,9 @@ it("keeps native card content and focus while previews await viewport activation
   const { request } = createFrameQueue();
   vi.spyOn(window, "requestAnimationFrame").mockImplementation(request);
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
-  onTestFinished(() => vi.restoreAllMocks());
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
   const view = mountSolid(() => (
     <DashboardsView
       data={routeData([
