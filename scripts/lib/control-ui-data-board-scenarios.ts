@@ -302,7 +302,7 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     route: controlUiSessionPath(sessionKey),
     expected: "A board receipt updates one report while preserving all 250 visible widgets.",
     fixtureOverrides: createDataBoardFixture,
-    rowSelector: "openclaw-board-widget-cell",
+    rowSelector: ".board-report__point, .board-report__metrics dd",
     prepare: prepareBoard,
     run: async (page, gateway) => {
       await gateway.setMethodResponse("board.get", boardSnapshot(2));
