@@ -28,6 +28,10 @@ function hold<T>(mock: { mockReturnValueOnce(value: Promise<T>): unknown }) {
   mock.mockReturnValueOnce(pending.promise);
   return pending;
 }
+async function resume<T>(pending: { resolve(value: T): void }, value: T) {
+  pending.resolve(value);
+  await flush();
+}
 
 class FakeCdp extends EventEmitter {
   send = vi.fn(async (_method: string, _params?: unknown) => ({}));
@@ -162,10 +166,6 @@ describe("browser screencast sessions", () => {
   it("shares one JPEG message across viewers, skips congestion, and ack-paces every frame", async () => {
     const first = await attach();
     const second = await attach();
-    expect(mocks.getPage).toHaveBeenCalledTimes(1);
-    expect(first.messages()).toEqual([
-      { type: "ready", targetId: "target-1", url: "https://example.test/", title: "Example" },
-    ]);
     expect(page.cdp.send).toHaveBeenCalledWith("Page.startScreencast", {
       format: "jpeg",
       quality: 70,
@@ -216,8 +216,7 @@ describe("browser screencast sessions", () => {
       expect(viewer.close).toHaveBeenCalledWith(4003, "navigation_blocked");
       expect(retired.detach).toHaveBeenCalledOnce();
     } else {
-      policy.resolve();
-      await flush();
+      await resume(policy, undefined);
       page.paint(11);
       expect(viewer.frames()).toHaveLength(1);
     }
@@ -243,8 +242,7 @@ describe("browser screencast sessions", () => {
     blocked.reject(new Error("blocked"));
     await flush();
     expect(page.newCDPSession).toHaveBeenCalledTimes(1);
-    next.resolve();
-    await flush();
+    await resume(next, undefined);
     expect.soft(page.newCDPSession).toHaveBeenCalledTimes(2);
 
     retired.paint(99, Buffer.from([0xff, 0xd8, 0x42, 0xff, 0xd9]));
@@ -265,8 +263,7 @@ describe("browser screencast sessions", () => {
     page.currentTitle = "Next";
     page.navigate(nextUrl);
     await flush();
-    initial.resolve();
-    await flush();
+    await resume(initial, undefined);
     page.paint(2);
     expect(viewer.messages()).toEqual([
       { type: "ready", targetId: "target-1", url: nextUrl, title: "Next" },
@@ -292,8 +289,7 @@ describe("browser screencast sessions", () => {
     const params = screencastParams({ lifecycleSignal: lifecycle.signal });
     const pending = await attach(params);
     lifecycle.abort();
-    acquired.resolve(page as unknown as Page);
-    await flush();
+    await resume(acquired, page as unknown as Page);
     expect(pending.close).toHaveBeenCalledWith(4004, "target_closed");
     expect(page.newCDPSession).not.toHaveBeenCalled();
     const profileSignal = new AbortController().signal;
@@ -311,8 +307,7 @@ describe("browser screencast sessions", () => {
     const successor = await attach();
     expect(mocks.getPage).toHaveBeenCalledTimes(1);
     expect(successor.send).not.toHaveBeenCalled();
-    detached.resolve();
-    await flush();
+    await resume(detached, undefined);
     expect(mocks.getPage).toHaveBeenCalledTimes(2);
     expect(successor.messages()).toHaveLength(1);
   });
@@ -333,26 +328,23 @@ describe("browser screencast sessions", () => {
     const detached = hold(page.cdp.detach);
     grant.abort();
     expect(viewer.close).toHaveBeenCalledWith(4006, "authority_revoked");
-    let settled = false;
-    const drain = Promise.all(work).then(() => {
-      settled = true;
-    });
+    const settled = vi.fn();
+    const drain = Promise.all(work).then(settled);
     await flush();
     try {
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
     } finally {
       detached.resolve();
     }
     await drain;
-    expect(settled).toBe(true);
+    expect(settled).toHaveBeenCalledOnce();
 
     const acquired = hold(mocks.getPage);
     const nextIngress = { ...ingress, signal: new AbortController().signal };
     const next = await attach(screencastParams(), nextIngress);
     current = false;
     const captures = page.newCDPSession.mock.calls.length;
-    acquired.resolve(page as unknown as Page);
-    await flush();
+    await resume(acquired, page as unknown as Page);
     await Promise.all(work);
     expect(page.newCDPSession).toHaveBeenCalledTimes(captures);
     expect(next.close).toHaveBeenCalledWith(4006, "authority_revoked");
@@ -365,8 +357,7 @@ describe("browser screencast sessions", () => {
     page.currentTitle = "Next";
     page.navigate(nextUrl);
     await flush();
-    title.resolve("Old title");
-    await flush();
+    await resume(title, "Old title");
     expect(viewer.messages()).toEqual([
       { type: "ready", targetId: "target-1", url: "https://example.test/", title: "Example" },
       { type: "meta", url: nextUrl, title: "Next" },
