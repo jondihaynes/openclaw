@@ -14,7 +14,7 @@ import type {
   GoogleMeetLatestConferenceRecordResult,
 } from "../meet-api.js";
 import type { GoogleMeetRuntime } from "../runtime.js";
-import { MEET_URL } from "./fixtures.test-helpers.js";
+import { MEET_URL, meetBrowserState } from "./fixtures.test-helpers.js";
 
 export { captureStdout } from "./fixtures.test-helpers.js";
 
@@ -122,12 +122,7 @@ export function setupGoogleMeetPlugin(
           result: JSON.stringify({
             audioInputRouted: true,
             audioOutputRouted: true,
-            ...(options.browserActResult ?? {
-              inCall: true,
-              micMuted: false,
-              title: "Meet call",
-              url: MEET_URL,
-            }),
+            ...(options.browserActResult ?? meetBrowserState()),
           }),
         });
       }
@@ -285,24 +280,20 @@ export async function invokeGoogleMeetGatewayMethodForTest(
     throw new Error(`gateway method not registered: ${method}`);
   }
   return await new Promise((resolve, reject) => {
-    const respond: GatewayRespond = (ok, payload, error) => {
-      if (ok) {
-        resolve(payload);
-        return;
-      }
-      reject(
-        Object.assign(new Error(error?.message ?? "gateway request failed"), {
-          details: error?.details ?? payload,
-        }),
-      );
-    };
     void Promise.resolve(
       handler({
         params: (params && typeof params === "object" && !Array.isArray(params)
           ? params
           : {}) as Record<string, unknown>,
         ...(pluginRuntimeOwnerId ? { client: { internal: { pluginRuntimeOwnerId } } } : {}),
-        respond,
+        respond: (ok, payload, error) =>
+          ok
+            ? resolve(payload)
+            : reject(
+                Object.assign(new Error(error?.message ?? "gateway request failed"), {
+                  details: error?.details ?? payload,
+                }),
+              ),
       }),
     ).catch(reject);
   });
