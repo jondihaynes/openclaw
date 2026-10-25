@@ -722,6 +722,7 @@ try {
     : undefined;
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
+    subscriptionInitialHistory: true,
     ...(settingsCoreSchema
       ? {
           methodResponses: {
@@ -2049,7 +2050,11 @@ try {
     let streaming;
     if (streamingReply) {
       const composer = page.locator(".agent-chat__composer-combobox textarea").last();
+      const initialDraft = await composer.inputValue();
       await composer.focus();
+      await composer.evaluate((input: HTMLTextAreaElement) =>
+        input.setSelectionRange(input.value.length, input.value.length),
+      );
       await cdp.send("Performance.enable", { timeDomain: performanceTimeDomain });
       let previousCpu = (await cdp.send("Performance.getMetrics")).metrics;
       let previousDelivered = 0;
@@ -2086,9 +2091,11 @@ try {
         runId: fixture.scenario.inFlightRun!.runId,
       });
       const streamingInput = new AbortController();
+      let typedCharacters = 0;
       const nativeInput = (async () => {
         while (!streamingInput.signal.aborted) {
           await page.keyboard.press("x");
+          typedCharacters++;
           await new Promise((resolve) => {
             setTimeout(resolve, 500);
           });
@@ -2186,6 +2193,7 @@ try {
         ...(await page.evaluate(() => Reflect.get(window, "__streamingReply").finish())),
         cpu,
         allocations: streamingAllocations,
+        typing: { characters: typedCharacters, draft: await composer.inputValue() },
       };
       if (allocationProfile) {
         await writeFile(
@@ -2211,6 +2219,14 @@ try {
         ),
       );
       await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.streaming.png`) });
+      if (
+        !typedCharacters ||
+        streaming.typing.draft !== initialDraft + "x".repeat(typedCharacters)
+      ) {
+        throw new Error(
+          `Streaming lost composer input: sent ${typedCharacters} characters, retained ${streaming.typing.draft.length}`,
+        );
+      }
       if (
         streaming.tailPosition.scrollHeight <= streaming.tailPosition.initialScrollHeight ||
         Math.abs(streaming.tailPosition.distanceFromBottom) > 2

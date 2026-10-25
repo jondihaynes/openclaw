@@ -1,5 +1,4 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
-import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 
 /** Prepare measured tail rows before resuming the ordinary overscan window. */
 export class TranscriptInitialRange {
@@ -51,31 +50,14 @@ export class TranscriptInitialRange {
     return true;
   }
 
-  finish(afterPaint = false): void {
+  finish(): void {
     this.pending = false;
     this.virtualizer().shouldAdjustScrollPositionOnItemSizeChange = undefined;
     if (!this.tailRows) {
       return;
     }
-    const resumeOverscan = () => {
-      this.tailRows = 0;
-      this.refresh();
-      this.invalidate();
-    };
-    cancelLayout(this);
-    if (afterPaint) {
-      // Paint the measured viewport before preparing the ordinary offscreen overscan.
-      scheduleLayout(this, () => () => scheduleLayout(this, () => resumeOverscan));
-    } else {
-      resumeOverscan();
-    }
-  }
-
-  disconnect(): void {
-    cancelLayout(this);
-    if (!this.pending && this.tailRows) {
-      this.tailRows = 0;
-      this.refresh();
-    }
+    this.tailRows = 0;
+    this.refresh();
+    this.invalidate();
   }
 }

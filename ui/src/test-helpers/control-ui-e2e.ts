@@ -256,6 +256,8 @@ export type ControlUiMockGatewayScenario = {
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
   omitFeatureMethods?: boolean;
   historyMessages?: unknown[];
+  /** Serve requested startup history inside the subscription reply. */
+  subscriptionInitialHistory?: boolean;
   sessionReactions?: Record<string, Record<string, MessageReactionSummary[]>>;
   /** Canonical per-session transcripts, shared by history and startup reads. */
   sessionTranscripts?: Record<
@@ -810,6 +812,7 @@ function normalizeScenario(
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
     omitFeatureMethods: scenario.omitFeatureMethods ?? false,
     historyMessages: scenario.historyMessages ?? [],
+    subscriptionInitialHistory: scenario.subscriptionInitialHistory ?? false,
     sessionReactions: scenario.sessionReactions ?? {},
     sessionTranscripts: scenario.sessionTranscripts ?? {},
     maxPayload: scenario.maxPayload ?? DEFAULT_MOCK_MAX_PAYLOAD_BYTES,
@@ -894,10 +897,9 @@ function installControlUiMockGateway(
     type?: unknown;
   };
   type DeferredResponse = {
-    id: string;
     method: string;
     params?: unknown;
-    socket: MockWebSocket;
+    respond: (response: unknown) => void;
   };
   type MockTerminalSession = {
     sessionId: string;
@@ -2227,6 +2229,62 @@ function installControlUiMockGateway(
     }
   }
 
+  function prepareResponse(
+    method: string,
+    params: unknown,
+    socket: MockWebSocket,
+    respond: (response: unknown) => void,
+  ): (() => void) | undefined {
+    const complete = (response: unknown) => {
+      if (
+        scenario.subscriptionInitialHistory &&
+        method === "sessions.messages.subscribe" &&
+        isRecord(params) &&
+        isRecord(params.initialHistory) &&
+        isRecord(response) &&
+        !hasOwn(response, "__mockError") &&
+        !hasOwn(scenario.methodResponses, method) &&
+        !requestHandlers.has(method)
+      ) {
+        const historyParams = {
+          ...params.initialHistory,
+          sessionKey: response.key,
+          agentId: params.agentId,
+        };
+        // The nested read uses the same fixture and delay/error controls as chat.startup,
+        // while the subscription remains the only request sent over the wire.
+        prepareResponse("chat.startup", historyParams, socket, (value) => {
+          const history = commitFixtureResponse("chat.startup", historyParams, value);
+          respond({
+            ...response,
+            initialHistory:
+              isRecord(history) && isRecord(history["__mockError"])
+                ? { ok: false, error: history["__mockError"] }
+                : { ok: true, payload: history },
+          });
+        })?.();
+        return;
+      }
+      respond(response);
+    };
+    if (deferredRequests.shouldDefer(method, params)) {
+      deferredRequests.responses.push({ method, params, respond: complete });
+      return undefined;
+    }
+    return () => {
+      const handler = requestHandlers.get(method);
+      if (handler) {
+        handler({
+          params,
+          respond: complete,
+          emit: (event, payload) => emitGatewayEvent(socket, event, payload),
+        });
+      } else {
+        complete(buildResponse(method, params));
+      }
+    };
+  }
+
   class MockWebSocket extends EventTarget {
     static readonly CLOSED = 3;
     static readonly CLOSING = 2;
@@ -2317,10 +2375,6 @@ function installControlUiMockGateway(
         return;
       }
       requests.push({ id, method, params: frame.params });
-      if (deferredRequests.shouldDefer(method, frame.params)) {
-        deferredRequests.responses.push({ id, method, params: frame.params, socket: this });
-        return;
-      }
       const respond = (response: unknown) => {
         const payload = commitFixtureResponse(method, frame.params, response);
         const mockError =
@@ -2364,20 +2418,10 @@ function installControlUiMockGateway(
           });
         }
       };
-      window.setTimeout(() => {
-        const handler = requestHandlers.get(method);
-        if (handler) {
-          // Delayed fixtures retain this request and socket, even when another
-          // request for the same method finishes first.
-          handler({
-            params: frame.params,
-            respond,
-            emit: (event, payload) => emitGatewayEvent(this, event, payload),
-          });
-        } else {
-          respond(buildResponse(method, frame.params));
-        }
-      }, 0);
+      const dispatch = prepareResponse(method, frame.params, this, respond);
+      if (dispatch) {
+        window.setTimeout(dispatch, 0);
+      }
     }
 
     suspend(): void {
@@ -2421,47 +2465,25 @@ function installControlUiMockGateway(
       ),
     rejectDeferred(method, error, options) {
       for (const response of deferredRequests.take(method, options)) {
-        response.socket.deliver({
-          error: {
+        response.respond({
+          __mockError: {
             code: error?.code ?? "INVALID_REQUEST",
             message: error?.message ?? "mock Gateway rejected request",
             ...(error?.details ? { details: error.details } : {}),
             ...(error?.retryable ? { retryable: true } : {}),
           },
-          id: response.id,
-          ok: false,
-          type: "res",
         });
       }
     },
     requests,
     resolveDeferred(method, payload, options) {
       for (const response of deferredRequests.take(method, options)) {
-        const resolvedPayload = commitFixtureResponse(
-          response.method,
-          response.params,
+        response.respond(
           responseFixtures.applyAgentModel(
             response.method,
             payload ?? buildResponse(response.method, response.params),
           ),
         );
-        const mockError = isRecord(resolvedPayload) ? resolvedPayload["__mockError"] : undefined;
-        if (!mockError) {
-          response.socket.sessionMessageSubscriptions.recordRequest(
-            response.method,
-            response.params,
-            resolvedPayload,
-          );
-        }
-        response.socket.deliver({
-          id: response.id,
-          ok: !mockError,
-          ...(mockError ? { error: mockError } : { payload: resolvedPayload }),
-          type: "res",
-        });
-        if (!mockError) {
-          emitTerminalOutput(response.socket, response.method, response.params, resolvedPayload);
-        }
       }
     },
     suspendLatest() {

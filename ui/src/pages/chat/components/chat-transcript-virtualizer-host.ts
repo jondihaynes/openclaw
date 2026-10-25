@@ -378,7 +378,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   };
 
   disconnect(): void {
-    this.initialRange.disconnect();
     this.renderer.disconnect(() => this.connected);
     this.layout.disconnect();
     this.endAnchor.disconnect();
@@ -768,7 +767,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.offsetState.syncNativeOffset?.();
     }
     if (isTranscriptRangeCommitted(this.threadInnerElement, this.virtualizer)) {
-      this.initialRange.finish(true);
+      this.initialRange.finish();
       this.renderer.syncInitialPosition();
     }
     this.invalidate();

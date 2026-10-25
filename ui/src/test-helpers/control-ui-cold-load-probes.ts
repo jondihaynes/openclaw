@@ -27,6 +27,12 @@ function installColdLoadProbes(
     params: unknown;
     stack: string | undefined;
   }> = [];
+  const socketCloses: Array<{
+    atMs: number;
+    code: number;
+    reason: string;
+    wasClean: boolean;
+  }> = [];
   const pending = new Map<
     string,
     {
@@ -351,7 +357,13 @@ function installColdLoadProbes(
       // A closed transport cannot answer; count its attempts without blocking settlement.
       socket.addEventListener(
         "close",
-        () => {
+        (event) => {
+          socketCloses.push({
+            atMs: performance.now(),
+            code: event.code,
+            reason: event.reason,
+            wasClean: event.wasClean,
+          });
           for (const [id, request] of pending) {
             if (request.socket !== socket) {
               continue;
@@ -644,6 +656,7 @@ function installColdLoadProbes(
         sentEvents: eventStream.sentEvents,
         idleMs: performance.now() - lastActivity,
         rpcs,
+        socketCloses,
         longTasks,
         sidebarHandoffs,
       };
