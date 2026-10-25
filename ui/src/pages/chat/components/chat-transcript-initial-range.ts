@@ -1,9 +1,15 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
 
-/** Prepare measured tail rows before resuming the ordinary overscan window. */
+/** Prepare the measured tail; admit offscreen overscan when the reader navigates. */
 export class TranscriptInitialRange {
   pending = true;
   private tailRows: number;
+  private viewportOnly = false;
+  private preparingOverscan = false;
+
+  get measuring(): boolean {
+    return this.pending || this.preparingOverscan;
+  }
 
   constructor(
     initialOffset: number | null,
@@ -16,7 +22,7 @@ export class TranscriptInitialRange {
 
   extract(range: Range): number[] {
     if (!this.tailRows) {
-      return this.normalRange(range);
+      return this.normalRange(this.viewportOnly ? { ...range, overscan: 0 } : range);
     }
     const count = Math.min(range.count, this.tailRows);
     return Array.from({ length: count }, (_, index) => range.count - count + index);
@@ -50,14 +56,34 @@ export class TranscriptInitialRange {
     return true;
   }
 
-  finish(): void {
+  finish(viewportOnly = false): void {
     this.pending = false;
     this.virtualizer().shouldAdjustScrollPositionOnItemSizeChange = undefined;
-    if (!this.tailRows) {
+    if (!this.tailRows && !this.viewportOnly) {
       return;
     }
+    this.preparingOverscan = this.viewportOnly && !viewportOnly;
+    // The measured viewport stays adaptive; offscreen rows wait for reader navigation.
     this.tailRows = 0;
+    this.viewportOnly = viewportOnly;
     this.refresh();
     this.invalidate();
+  }
+
+  complete(): void {
+    if (this.pending) {
+      this.finish(true);
+    } else {
+      this.preparingOverscan = false;
+    }
+  }
+
+  disconnect(): void {
+    this.preparingOverscan = false;
+    if (!this.pending && (this.tailRows || this.viewportOnly)) {
+      this.tailRows = 0;
+      this.viewportOnly = false;
+      this.refresh();
+    }
   }
 }
