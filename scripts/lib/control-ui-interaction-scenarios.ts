@@ -28,6 +28,7 @@ import { dataBoardScenarios } from "./control-ui-data-board-scenarios.ts";
 import { dataCatalogScenarios } from "./control-ui-data-catalog-scenarios.ts";
 import { dataLogScenarios } from "./control-ui-data-log-scenarios.ts";
 import { dataUsageScenarios } from "./control-ui-data-usage-scenarios.ts";
+import { heavyContentScenarios } from "./control-ui-heavy-content-scenarios.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
 
@@ -71,6 +72,7 @@ export type InteractionFixtureOverrides = Omit<
 };
 
 type InteractionFixtureOptions = {
+  heavyContent?: boolean;
   runningSessions?: boolean;
   longSessionLabels?: boolean;
   longUserMessages?: boolean;
@@ -383,7 +385,7 @@ export function createInteractionFixture(
         .map((key) => [
           key,
           {
-            messages: Array.from({ length: 400 }, (_, index) => ({
+            messages: Array.from({ length: options.heavyContent ? 0 : 400 }, (_, index) => ({
               role: index % 2 === 0 ? "user" : "assistant",
               content: `Transcript ${sessionKeys.indexOf(key)} message ${index}.\n${"Synthetic transcript detail.\n".repeat(
                 options.longUserMessages && index % 2 === 0 ? 80 : 4,
@@ -1608,6 +1610,48 @@ export const interactionScenarios: readonly InteractionScenario[] = [
   ...dataCatalogScenarios,
   ...dataLogScenarios,
   ...dataUsageScenarios,
+  ...(
+    ["tooltips", "link-providers", "link-metadata", "ci-pairs", "clawhub-cards"] as const
+  ).flatMap((family): InteractionScenario[] => {
+    const active: InteractionScenario = {
+      id: `projection-${family}`,
+      route: "/instance-resource-fixture.html",
+      expected:
+        "Real production consumers on an isolated benchmark document; native observer/listener/subscription counts and retained scope/cleanup contracts, with twenty bounded native publication batches.",
+      projectionFamily: family,
+      prepare: async (page) => {
+        if (await page.locator("openclaw-app").count()) {
+          throw new Error("Instance resources require the benchmark-only blank document");
+        }
+      },
+      run: async (page): Promise<void> => {
+        await runProjectionFixture(page);
+      },
+    };
+    const idle = (["visible", "hidden"] as const).map((visibility): InteractionScenario => ({
+      id: `projection-${family}-idle-${visibility}`,
+      route: "/instance-resource-fixture.html",
+      expected: `Actual ${family} consumers stay mounted for three ${visibility} native-clock seconds; no global count instrumentation exists in CPU mode.`,
+      projectionFamily: family,
+      projectionIdle: true,
+      visibility: visibility === "hidden" ? visibility : undefined,
+      prepare: async () => {},
+      run: async (page): Promise<void> => {
+        const state = () => page.evaluate(() => document.visibilityState);
+        if ((await state()) !== visibility) {
+          throw new Error(`Expected ${visibility} instance document`);
+        }
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 3_000);
+        });
+        if ((await state()) !== visibility) {
+          throw new Error("Instance idle visibility changed");
+        }
+      },
+    }));
+    return [active].concat(idle);
+  }),
+  ...heavyContentScenarios,
   ...createBrowserResourceScenarios({
     route: controlUiSessionPath(sessionKeys[0]),
     openPanel: openInteractionPanel,

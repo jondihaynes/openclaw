@@ -140,10 +140,17 @@ async function settle(page: Page) {
   );
 }
 
-async function metrics(cdp: CDPSession) {
+async function metrics(
+  cdp: CDPSession,
+): Promise<Record<string, number> & { JSHeapUsedSize: number }> {
   const result: { metrics: Array<{ name: string; value: number }> } =
     await cdp.send("Performance.getMetrics");
-  return Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
+  const measured = Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
+  const heapUsed = measured.JSHeapUsedSize;
+  if (heapUsed === undefined) {
+    throw new Error("Chromium did not report the required JS heap metric");
+  }
+  return { ...measured, JSHeapUsedSize: heapUsed };
 }
 
 function distribution(numbers: number[]) {
@@ -284,8 +291,10 @@ type Result = {
   taskMs?: number;
   layoutMs?: number;
   styleMs?: number;
+  heapBeforeBytes?: number;
+  heapAfterBytes?: number;
+  heapDeltaBytes?: number;
   durationBreakdownMs?: Record<string, number>;
-  heap?: { beforeBytes: number; afterBytes: number; deltaBytes: number };
   retainedHeap?: { beforeBytes: number; afterBytes?: number; deltaBytes?: number };
   longTasks?: { count: number; totalMs: number; maxMs: number };
   requests?: Record<string, number>;
@@ -350,8 +359,9 @@ if (values["process-wakeups"]) {
     }
   }
 }
+const browserExecutable = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const browser = await chromium.launch({
-  executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+  executablePath: browserExecutable,
   headless: !values.headed,
 });
 
@@ -504,6 +514,7 @@ try {
       {
         revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
         browser: browser.version(),
+        browserExecutable,
         host: {
           platform: os.platform(),
           arch: os.arch(),
@@ -555,17 +566,30 @@ try {
                 "board-pins": { A: 400, B: 80 },
                 "sdk-avatars": { A: 120, B: 40 },
                 "sdk-avatar-identities": { A: 120, B: 40 },
+                tooltips: { A: 100 },
+                "link-providers": { A: 100, B: 30 },
+                "link-metadata": { A: 100, B: 30 },
+                "ci-pairs": { A: 100, B: 30 },
+                "clawhub-cards": { A: 100, B: 30 },
               },
               publications: 20,
+              nativeResourceWork: {
+                tooltips: "20 native child-list mutation batches",
+                "link-providers": "20 native child-list mutation batches in A",
+                "link-metadata": "20 replay request events; two actual panel producers",
+                "ci-pairs": "20 native A Gateway snapshots",
+                "clawhub-cards": "20 native A Gateway snapshots",
+                idle: "No deliberate publication; three native-clock seconds",
+              },
               note: "Extra benchmark-only entry changes the build graph; compare identical entry builds and measure shipping bytes separately.",
             }
           : undefined,
         acceptance:
-          "For fixed steps: >=10 serial AB pairs per viewport, all median/p95/min/max cells reviewed; any >20% regression stops landing. No boot growth beyond 64 B.",
+          "For fixed steps: >=10 serial AB pairs per viewport, all median/p95/min/max cells reviewed; any >20% regression stops landing. Compare startup with its same-host merge base; growth beyond build variance needs an accepted measured win.",
         exclusions: [
           "No live Gateway/provider",
           "No sidebar text input exists; measure command palette search separately",
-          "No fake clocks, Lit probes or simulated transport delay",
+          "No fake clocks or Lit probes; simulated transport delays are named by their scenario",
         ],
         scenarios: scenarios.map(({ id, route, expected, fixture, dataPage }) => ({
           id,
@@ -762,8 +786,11 @@ try {
                 scenario.projectionFamily,
                 values["projection-counts"],
               );
-              await page.waitForFunction(() => window.openclawControlUi !== undefined);
-              await settleSidebarBackgroundWork(page);
+              // Native instance fixtures have no shell or navigation prefetch owner.
+              if (scenario.route !== "/instance-resource-fixture.html") {
+                await page.waitForFunction(() => window.openclawControlUi !== undefined);
+                await settleSidebarBackgroundWork(page);
+              }
             }
             // Slow CPUs can still be loading boot modules after the first ready frame.
             await page.waitForLoadState("networkidle");
@@ -946,13 +973,9 @@ try {
               result.projectionCoverageArtifact = artifact;
             }
             const after = await metrics(cdp);
-            if (before.JSHeapUsedSize !== undefined && after.JSHeapUsedSize !== undefined) {
-              result.heap = {
-                beforeBytes: before.JSHeapUsedSize,
-                afterBytes: after.JSHeapUsedSize,
-                deltaBytes: after.JSHeapUsedSize - before.JSHeapUsedSize,
-              };
-            }
+            result.heapBeforeBytes = before.JSHeapUsedSize;
+            result.heapAfterBytes = after.JSHeapUsedSize;
+            result.heapDeltaBytes = after.JSHeapUsedSize - before.JSHeapUsedSize;
             result.longTasks = await taskProbe.evaluate(({ durations, observer }) => {
               durations.push(...observer.takeRecords().map((entry) => entry.duration));
               observer.disconnect();
@@ -1033,13 +1056,26 @@ try {
               const sdk =
                 scenario.projectionFamily === "sdk-avatars" ||
                 scenario.projectionFamily === "sdk-avatar-identities";
+              const resourceFamily = [
+                "tooltips",
+                "link-providers",
+                "link-metadata",
+                "ci-pairs",
+                "clawhub-cards",
+              ].includes(scenario.projectionFamily);
               const method =
                 scenario.projectionFamily === "board-pins"
                   ? "board.get"
-                  : scenario.projectionFamily === "sdk-avatar-identities"
-                    ? "agent.identity.get"
-                    : "agents.list";
-              const expected = scenario.projectionIdle ? 0 : sdk ? 10 : 20;
+                  : scenario.projectionFamily === "ci-pairs"
+                    ? "controlUi.sessionPullRequests.checks"
+                    : scenario.projectionFamily === "clawhub-cards"
+                      ? "plugins.catalog.get"
+                      : resourceFamily
+                        ? "forge.detail"
+                        : scenario.projectionFamily === "sdk-avatar-identities"
+                          ? "agent.identity.get"
+                          : "agents.list";
+              const expected = scenario.projectionIdle || resourceFamily ? 0 : sdk ? 10 : 20;
               if ((result.requests[method] ?? 0) !== expected) {
                 throw new Error(
                   `Expected ${expected} measured ${method} requests, got ${result.requests[method] ?? 0}`,
