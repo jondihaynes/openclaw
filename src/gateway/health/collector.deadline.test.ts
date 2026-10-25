@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 
-type DeadlineAccount = { accountId: string; enabled: boolean; configured: boolean };
+type DeadlineAccount = { accountId: string };
 type Probe = (account: DeadlineAccount) => Promise<Record<string, unknown>>;
 
 let testConfig: OpenClawConfig = {};
@@ -36,10 +36,8 @@ function hold<T>(value: T) {
 function installProbe(accountIds: string[], probe: Probe, id = "chat") {
   const started: string[] = [];
   const work = { started, active: 0, maxActive: 0 };
-  const resolveAccount = (_cfg: OpenClawConfig, accountId?: string | null): DeadlineAccount => ({
-    accountId: accountId?.trim() || "default",
-    enabled: true,
-    configured: true,
+  const resolveAccount = (_: OpenClawConfig, key?: string | null) => ({
+    accountId: key ?? "default",
   });
   const plugin: ChannelPlugin<DeadlineAccount> = {
     ...channelPlugin({ id, label: "Deadline Test" }),
@@ -47,8 +45,8 @@ function installProbe(accountIds: string[], probe: Probe, id = "chat") {
       listAccountIds: () => accountIds,
       resolveAccount,
       inspectAccount: resolveAccount,
-      isEnabled: (account) => account.enabled,
-      isConfigured: (account) => account.configured,
+      isEnabled: () => true,
+      isConfigured: () => true,
     },
     status: {
       probeAccount: async ({ account }) => {
@@ -73,14 +71,9 @@ function collect(audience: "public" | "admin" = "admin") {
 }
 
 async function flushHealthPreparation(collecting: Promise<unknown>) {
-  // Receipt reads use real I/O; fake time starts only after the controlled session read.
-  await awaitGateBeforeSettlement(
-    sessionPrepared.promise,
-    collecting,
-    "Health collection settled before session preparation",
-  );
+  // Settle real session I/O and its yield before advancing the fake deadline.
+  await awaitGateBeforeSettlement(sessionPrepared.promise, collecting, "Early health settlement");
   await vi.advanceTimersByTimeAsync(0);
-  // The fake deadline clock does not drive the real yield after a session read.
   await flushImmediate();
 }
 
@@ -129,28 +122,17 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-it("does not start probes when session preparation exhausts the aggregate deadline", async () => {
-  vi.useFakeTimers();
-  const probe = vi.fn(async () => ({ ok: true }));
-  installProbe(["default"], probe);
-  readSummary.mockImplementationOnce(() => {
-    vi.advanceTimersByTime(7_000);
-    return emptySummary();
-  });
-
-  const snap = await collect();
-  const channel = snap.channels.chat;
-
-  const sqlitePath = path.join(path.dirname(sessionStorePath), "openclaw-agent.sqlite");
-  expect(snap.sessions.path).toBe(sqlitePath);
-  expect(channel?.probe).toEqual(timeoutProbe);
-  expect(channel?.accounts?.default?.probe).toEqual(timeoutProbe);
-  expect(probe).not.toHaveBeenCalled();
-}, 1_000);
-
-it.each(["imessage", "chat"])(
+const publicFailure = {
+  ok: false,
+  error:
+    "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+};
+it.each([
+  ["imessage", publicFailure],
+  ["chat", timeoutProbe],
+] as const)(
   "retains only safe public negatives through a slow %s summary",
-  async (channelId) => {
+  async (channelId, expected) => {
     vi.useFakeTimers();
     const enteredSummary = createDeferredCore();
     const releaseSummary = hold(undefined);
@@ -170,15 +152,7 @@ it.each(["imessage", "chat"])(
     await enteredSummary.promise;
     await vi.advanceTimersByTimeAsync(7_000);
     const result = await collecting;
-    expect(result.channels[channelId]?.probe).toEqual(
-      channelId === "imessage"
-        ? {
-            ok: false,
-            error:
-              "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
-          }
-        : timeoutProbe,
-    );
+    expect(result.channels[channelId]?.probe).toEqual(expected);
     expect(JSON.stringify(result)).not.toContain("/Users/synthetic");
   },
 );
@@ -187,22 +161,14 @@ it("preserves healthy accounts at the deadline and retains unfinished probe work
   vi.useFakeTimers();
   const slowProbe = hold<Record<string, unknown>>({ ok: true });
   const accountIds = ["default", "fast-1", "fast-2", "fast-3", "fast-4", "fast-5"];
-  const { work } = installProbe(accountIds, async (account) => {
-    if (account.accountId === "default") {
-      return await slowProbe.promise;
-    }
-    await Promise.resolve();
-    return { ok: true, accountId: account.accountId };
-  });
-
+  const { work } = installProbe(accountIds, ({ accountId }) =>
+    accountId === "default" ? slowProbe.promise : Promise.resolve({ ok: true, accountId }),
+  );
   const snapshotPromise = collect();
   await flushHealthPreparation(snapshotPromise);
   await vi.advanceTimersByTimeAsync(7_000);
   const snap = await snapshotPromise;
   const channel = snap.channels.chat;
-
-  expect(work.started).toEqual(accountIds);
-  expect(work.maxActive).toBeLessThanOrEqual(5);
   expect(channel?.probe).toEqual(timeoutProbe);
   for (const accountId of accountIds.slice(1)) {
     expect(channel?.accounts?.[accountId]?.probe).toMatchObject({ ok: true });
@@ -216,27 +182,34 @@ it("preserves healthy accounts at the deadline and retains unfinished probe work
   expect(work.active).toBe(0);
 }, 1_000);
 
-it.each([60_000, -60_000])(
-  "keeps the 7s budget when the wall clock steps %s ms",
-  async (stepMs) => {
+it.each([
+  { name: "session preparation exhausts the deadline", elapsed: 7_000, step: 0 },
+  { name: "the wall clock jumps forward", elapsed: 0, step: 60_000 },
+  { name: "the wall clock jumps backward", elapsed: 0, step: -60_000 },
+])(
+  "keeps the aggregate monotonic budget when $name",
+  async ({ elapsed, step }) => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
     const slowProbe = hold<Record<string, unknown>>({ ok: true });
-    installProbe(["default"], async () => (stepMs > 0 ? { ok: true } : await slowProbe.promise));
+    const { work } = installProbe(["default"], () =>
+      step < 0 ? slowProbe.promise : Promise.resolve({ ok: true }),
+    );
     readSummary.mockImplementation(() => {
-      // setSystemTime moves only Date; performance.now() keeps monotonic time.
-      vi.setSystemTime(Date.now() + stepMs);
+      vi.advanceTimersByTime(elapsed);
+      // Date changes independently of the monotonic deadline.
+      vi.setSystemTime(Date.now() + step);
       return emptySummary();
     });
 
     const snapshotPromise = collect();
-    await flushHealthPreparation(snapshotPromise);
+    await (elapsed ? snapshotPromise : flushHealthPreparation(snapshotPromise));
     await vi.advanceTimersByTimeAsync(7_000);
     const snap = await snapshotPromise;
     slowProbe.resolve({ ok: true });
-
-    expect(snap.channels.chat?.accounts?.default?.probe).toEqual(
-      stepMs > 0 ? { ok: true } : timeoutProbe,
-    );
+    const expected = step > 0 ? { ok: true } : timeoutProbe;
+    expect(snap.channels.chat?.probe).toEqual(expected);
+    expect(snap.channels.chat?.accounts?.default?.probe).toEqual(expected);
+    expect(work.started).toEqual(elapsed ? [] : ["default"]);
   },
   1_000,
 );

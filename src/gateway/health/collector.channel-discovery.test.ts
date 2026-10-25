@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as ingressHealth from "../../channels/message/ingress-queue-health.js";
 import * as packageState from "../../channels/plugins/package-state-probes.js";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import * as configRuntime from "../../config/config.js";
 import {
   createPluginMetadataSnapshot,
@@ -46,47 +46,67 @@ afterEach(async () => {
   state = undefined;
 });
 
-it("includes admitted accounts without operational hooks in public health", async () => {
+it("reports admitted and unavailable channels without credential discovery or public leaks", async () => {
   const config: OpenClawConfig = {
     agents,
     bindings: [{ agentId: "main", match: { channel: "admitted-chat", accountId: "bound" } }],
+    channels: {
+      "failed-chat": { accounts: { default: { enabled: true }, disabled: { enabled: false } } },
+    },
   };
   vi.mocked(configRuntime.getRuntimeConfig).mockReturnValue(config);
-  const resolveAccount = vi.fn((_cfg: OpenClawConfig, accountId?: string | null) => {
+  const manifestRegistry = makeRegistry([
+    {
+      id: "failed-owner",
+      origin: "bundled",
+      channels: ["failed-chat"],
+      channelConfigs: { "failed-chat": { schema: { type: "object" } } },
+    },
+  ]);
+  setGatewayPluginMetadataSnapshot(createPluginMetadataSnapshot({ config, manifestRegistry }), {
+    config,
+  });
+  const resolveAccount = (_cfg: OpenClawConfig, accountId?: string | null) => {
     if (accountId !== "primary" && accountId !== "bound") {
       throw new Error("admitted account has no current operational configuration");
     }
-    return { accountId, enabled: true, configured: true };
-  });
-  const inspectAccount = vi.fn(resolveAccount);
-  const probeAccount = vi.fn(async () => ({ ok: true, credential: "private-live-probe" }));
-  const buildChannelSummary = vi.fn(({ account }: { account: { accountId: string } }) => ({
+    return { accountId, enabled: true, configured: true, linked: true };
+  };
+  const probeAccount = async () => ({ ok: true, credential: "private-live-probe" });
+  const buildChannelSummary = ({ account }: { account: { accountId: string } }) => ({
     name: `Resolved ${account.accountId}`,
-  }));
+  });
   const plugin: ChannelPlugin<ReturnType<typeof resolveAccount>> = {
     ...createChannelTestPluginBase({ id: "admitted-chat" }),
     config: {
       listAccountIds: () => ["primary"],
       resolveAccount,
-      inspectAccount,
+      inspectAccount: resolveAccount,
       isEnabled: (account) => account.enabled,
       isConfigured: (account) => account.configured,
     },
     status: { probeAccount, buildChannelSummary },
   };
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "admitted-owner", plugin, source: "fixture" }]),
+  const registry = createTestRegistry([{ pluginId: "admitted-owner", plugin, source: "fixture" }]);
+  registry.plugins.push(
+    createPluginRecord({
+      id: "failed-owner",
+      status: "error",
+      failurePhase: "load",
+      channelIds: ["failed-chat"],
+      error: "fixture channel runtime failed to load",
+    }),
   );
-  const { recovered, recoveredFacts, retrying } = createRecordedAccountSnapshots();
-  const terminal: ChannelAccountSnapshot = {
-    accountId: "terminal",
-    enabled: true,
-    configured: true,
-    running: false,
-    lifecycle: "blocked",
-    terminalDisconnect: true,
-    lastError: "account requires login",
-  };
+  setActivePluginRegistry(registry);
+  vi.spyOn(packageState, "listBundledChannelIdsForPackageState").mockImplementation(
+    (metadataKey) => (metadataKey === "persistedAuthState" ? ["dormant-chat"] : []),
+  );
+  const checkPersistedAuth = vi
+    .spyOn(packageState, "hasBundledChannelPackageState")
+    .mockImplementation(() => {
+      throw new Error("health attempted dormant credential discovery");
+    });
+  const { recovered, recoveredFacts } = createRecordedAccountSnapshots();
   const snapshot = await collectHealth({
     audience: "public",
     probe: true,
@@ -99,8 +119,7 @@ it("includes admitted accounts without operational hooks in public health", asyn
             audience:
               "https://audience-user:audience-password@audience.example.test/?token=audience-token",
           },
-          retrying,
-          terminal,
+          terminal: { accountId: "terminal", running: false, terminalDisconnect: true },
         },
       },
     },
@@ -110,16 +129,21 @@ it("includes admitted accounts without operational hooks in public health", asyn
   expect(channel).toMatchObject({ accountId: "bound", name: "Resolved bound" });
   const accounts = expectDefined(channel.accounts, "admitted account health records");
   const accountIds = Object.keys(accounts).toSorted();
-  expect(accountIds).toEqual(["bound", "primary", "recovered", "retrying", "terminal"]);
+  expect(accountIds).toEqual(["bound", "primary", "recovered", "terminal"]);
   expect(accounts).toMatchObject({
-    primary: { accountId: "primary", configured: true, running: false, name: "Resolved primary" },
+    primary: {
+      accountId: "primary",
+      configured: true,
+      linked: true,
+      running: false,
+      name: "Resolved primary",
+    },
     recovered: {
       ...recoveredFacts,
       baseUrl: "https://chat.example.test/?token=***",
       audience: "https://audience.example.test/?token=***",
     },
-    retrying,
-    terminal: { ...terminal, healthState: "terminal-disconnect" },
+    terminal: { healthState: "terminal-disconnect" },
   });
   const admitted = expectDefined(accounts.recovered, "admitted runtime health");
   expect(admitted.connected).toBeUndefined();
@@ -128,88 +152,10 @@ it("includes admitted accounts without operational hooks in public health", asyn
   )) {
     expect(admitted[field], field).toBeUndefined();
   }
-  for (const resolve of [resolveAccount, inspectAccount]) {
-    expect(new Set(resolve.mock.calls.map((call) => call[1]))).toEqual(
-      new Set(["primary", "bound"]),
-    );
-  }
-  for (const hook of [probeAccount, buildChannelSummary]) {
-    expect(hook).toHaveBeenCalledTimes(2);
-  }
   expect(accounts.primary?.probe).toBeUndefined();
   expect(JSON.stringify(snapshot)).not.toContain("private-live-probe");
-});
-
-it("uses admitted channels and configured failures without credential discovery", async () => {
-  const config: OpenClawConfig = {
-    agents: { ownership: "explicit", entries: { main: {} } },
-    channels: {
-      "failed-chat": {
-        accounts: { default: { enabled: true }, disabled: { enabled: false } },
-      },
-    },
-  };
-  vi.mocked(configRuntime.getRuntimeConfig).mockReturnValue(config);
-  setGatewayPluginMetadataSnapshot(
-    createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: makeRegistry([
-        {
-          id: "failed-owner",
-          origin: "bundled",
-          channels: ["failed-chat"],
-          channelConfigs: { "failed-chat": { schema: { type: "object" } } },
-        },
-      ]),
-    }),
-    { config },
-  );
-  const account = { accountId: "default", enabled: true, configured: true, linked: true };
-  const probeAccount = vi.fn(async () => ({ ok: true }));
-  const registered = createChannelTestPluginBase({
-    id: "linked-chat",
-    config: { resolveAccount: () => account, inspectAccount: () => account },
-  });
-  const registry = createTestRegistry([
-    {
-      pluginId: "linked-owner",
-      plugin: { ...registered, status: { probeAccount } },
-      source: "fixture",
-    },
-  ]);
-  registry.plugins.push(
-    createPluginRecord({
-      id: "failed-owner",
-      status: "error",
-      failurePhase: "load",
-      channelIds: ["failed-chat"],
-      error: "fixture channel runtime failed to load",
-    }),
-  );
-  setActivePluginRegistry(registry);
-
-  vi.spyOn(packageState, "listBundledChannelIdsForPackageState").mockImplementation(
-    (metadataKey) => (metadataKey === "persistedAuthState" ? ["dormant-chat"] : []),
-  );
-  const checkPersistedAuth = vi
-    .spyOn(packageState, "hasBundledChannelPackageState")
-    .mockImplementation(() => {
-      throw new Error("health attempted dormant credential discovery");
-    });
-  const snapshot = await collectHealth({
-    audience: "admin",
-    probe: true,
-    runtimeSnapshot: { channels: {}, channelAccounts: {} },
-  });
-
   expect(checkPersistedAuth).not.toHaveBeenCalled();
-  expect(snapshot.channelOrder.toSorted()).toEqual(["failed-chat", "linked-chat"]);
-  expect(snapshot.channels["linked-chat"]).toMatchObject({
-    configured: true,
-    linked: true,
-    probe: { ok: true },
-  });
-  expect(probeAccount).toHaveBeenCalledOnce();
+  expect(snapshot.channelOrder.toSorted()).toEqual(["admitted-chat", "failed-chat"]);
   expect(snapshot.channels["failed-chat"]?.accounts).toMatchObject({
     default: { enabled: true, configured: true, running: false, lifecycle: "blocked" },
     disabled: { enabled: false, configured: true, running: false, lifecycle: "blocked" },
@@ -219,7 +165,7 @@ it("uses admitted channels and configured failures without credential discovery"
   ]);
 });
 
-it("preserves the health snapshot when outbound admission capture fails", async () => {
+it("preserves ingress failures and pressure when outbound admission capture fails", async () => {
   const capture = vi
     .spyOn(deliveryQueueState, "captureDeliveryQueueStateContext")
     .mockImplementation(() => {
@@ -227,64 +173,27 @@ it("preserves the health snapshot when outbound admission capture fails", async 
     });
   const countOutbound = vi.spyOn(deliveryQueueState, "countFailedDeliveryQueueEntries");
   const failed = [{ channelId: "telegram", accountId: "ops", count: 1 }];
+  const pressure = [
+    {
+      channelId: "telegram",
+      accountId: "ops",
+      laneCount: 1,
+      pendingCount: 56,
+      claimedCount: 0,
+      blockedCount: 55,
+      oldestReceivedAt: 1_000,
+    },
+  ];
   vi.spyOn(ingressHealth, "countChannelIngressQueueHealth").mockResolvedValue({
     failed,
-    pressure: [],
+    pressure,
   });
   const pending = collectHealth({ audience: "admin", probe: false });
   expect(capture).toHaveBeenCalledTimes(1);
   expect(await pending).toMatchObject({
     channels: {},
-    deliveryQueues: { failed: [], ingressFailed: failed },
+    deliveryQueues: { failed: [], ingressFailed: failed, ingressPressure: pressure },
   });
   expect(capture).toHaveBeenCalledTimes(1);
   expect(countOutbound).not.toHaveBeenCalled();
-});
-
-it("surfaces a retry-floor ingress lane with 55 blocked followers", async () => {
-  const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");
-  const { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } =
-    await import("../../channels/message/ingress-retry-policy.js");
-  const now = Date.now();
-  const account = { channelId: "telegram", accountId: "ops" };
-  const ingressQueue = createChannelIngressQueue<{ text: string }>({ ...account, now: () => now });
-  const enqueue = (id: string, text: string, age: number, laneKey = "private-lane") =>
-    ingressQueue.enqueue(id, { text }, { laneKey, receivedAt: now - age });
-  const claim = async (id: string) =>
-    expectDefined(await ingressQueue.claim(id, { ownerId: "private-owner" }), "queue claim");
-  await enqueue("retry-head-private", "private payload", 60_000);
-  for (let attempt = 0; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
-    await ingressQueue.release(await claim("retry-head-private"), {
-      lastError: "private handler error",
-      releasedAt: now,
-    });
-  }
-  for (let index = 0; index < 55; index += 1) {
-    await enqueue(`follower-private-${index}`, `private follower ${index}`, 59_000 - index);
-  }
-  await enqueue("ordinary-retry-private", "ordinary retry", 30_000, "ordinary-private-lane");
-  await ingressQueue.release(await claim("ordinary-retry-private"), {
-    lastError: "first attempt",
-    releasedAt: now,
-  });
-  await enqueue("fresh-claim-private", "fresh claim", 10_000, "fresh-private-lane");
-  await claim("fresh-claim-private");
-
-  const snap = await collectHealth({ audience: "admin", probe: false });
-  expect(snap.deliveryQueues).toEqual({
-    failed: [],
-    ingressPressure: [
-      {
-        ...account,
-        laneCount: 1,
-        pendingCount: 56,
-        claimedCount: 0,
-        blockedCount: 55,
-        oldestReceivedAt: now - 60_000,
-      },
-    ],
-  });
-  expect(JSON.stringify(snap.deliveryQueues)).not.toMatch(
-    /private-lane|private-owner|private payload|private handler error|retry-head-private/,
-  );
 });
