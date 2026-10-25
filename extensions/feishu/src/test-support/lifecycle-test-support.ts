@@ -9,7 +9,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
-import { withFeishuRuntimeDefaults } from "../bot.test-support.js";
+import { replyDispatcher, withFeishuRuntimeDefaults } from "../bot.test-support.js";
 import { getFeishuLifecycleTestMocks } from "../lifecycle.test-support.js";
 import { createFeishuTestIngressQueue } from "../monitor.test-mocks.js";
 import { getFeishuRuntime, setFeishuRuntime } from "../runtime.js";
@@ -53,12 +53,7 @@ export function restoreFeishuLifecycleStateDir(originalStateDir: string | undefi
 }
 
 export function createFeishuLifecycleReplyDispatcher() {
-  return {
-    dispatcherOptions: {},
-    delivery: { deliver: vi.fn(async () => {}) },
-    replyOptions: {},
-    ensureNoVisibleReplyFallback: vi.fn(async () => false),
-  };
+  return replyDispatcher(vi.fn(async () => false));
 }
 
 export function installFeishuLifecycleReplyRuntime(params: {
@@ -144,19 +139,14 @@ export function installFeishuLifecycleReplyRuntime(params: {
 export function mockFeishuReplyOnceDispatch({
   dispatchReplyFromConfigMock,
   replyText,
-  shouldSendFinalReply: shouldSend,
 }: {
   dispatchReplyFromConfigMock: LifecycleMocks["dispatchReplyFromConfigMock"];
   replyText: string;
-  shouldSendFinalReply?: (ctx: unknown) => boolean;
 }) {
-  dispatchReplyFromConfigMock.mockImplementation(async ({ ctx, dispatcher, replyOptions }) => {
+  dispatchReplyFromConfigMock.mockImplementation(async ({ dispatcher, replyOptions }) => {
     await replyOptions?.turnAdoptionLifecycle?.onAdopted();
-    const shouldSendFinalReply = shouldSend?.(ctx) ?? true;
-    if (shouldSendFinalReply && typeof dispatcher?.sendFinalReply === "function") {
-      await dispatcher.sendFinalReply({ text: replyText });
-    }
-    return { queuedFinal: false, counts: { final: shouldSendFinalReply ? 1 : 0 } };
+    await dispatcher.sendFinalReply({ text: replyText });
+    return { queuedFinal: false, counts: { final: 1 } };
   });
 }
 
@@ -247,15 +237,6 @@ export function createFeishuTextMessageEvent(params: {
   };
 }
 
-async function expectFeishuLifecycleEventually(assertion: LifecycleAssertion, timeoutMs: number) {
-  try {
-    await assertion();
-  } catch {
-    await vi.waitFor(assertion, { timeout: timeoutMs });
-  }
-}
-
-type LifecycleAssertion = () => void | Promise<void>;
 type CallMock = ReturnType<typeof vi.fn>;
 type LifecycleReplay = {
   handler: (data: unknown) => Promise<void>;
@@ -263,41 +244,28 @@ type LifecycleReplay = {
   waitTimeoutMs?: number;
 };
 
-async function expectReplayCallCounts(
-  params: LifecycleReplay,
-  first: CallMock[],
-  second = first,
-  count = 1,
-) {
-  await runFeishuLifecycleSequence(
-    [() => params.handler(params.event), () => params.handler(params.event)],
-    [first, second].map((mocks) => () => {
+async function expectReplayCallCounts(params: LifecycleReplay, first: CallMock[], second = first) {
+  for (const mocks of [first, second]) {
+    await params.handler(params.event);
+    const assertion = () => {
       for (const mock of mocks) {
-        expect(mock).toHaveBeenCalledTimes(count);
+        expect(mock).toHaveBeenCalledTimes(1);
       }
-    }),
-    params.waitTimeoutMs,
-  );
-}
-
-async function runFeishuLifecycleSequence(
-  deliveries: Array<() => Promise<void>>,
-  waits: LifecycleAssertion[],
-  timeoutMs = FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS,
-) {
-  for (const [index, deliver] of deliveries.entries()) {
-    await deliver();
-    await expectFeishuLifecycleEventually(waits[index] ?? waits.at(-1) ?? (() => {}), timeoutMs);
+    };
+    try {
+      assertion();
+    } catch {
+      await vi.waitFor(assertion, {
+        timeout: params.waitTimeoutMs ?? FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS,
+      });
+    }
   }
 }
 
-export async function expectFeishuSingleEffectAcrossReplay(params: {
-  handler: (data: unknown) => Promise<void>;
-  event: unknown;
-  effectMock: CallMock;
-  effectCount?: number;
-}) {
-  await expectReplayCallCounts(params, [params.effectMock], undefined, params.effectCount ?? 1);
+export async function expectFeishuSingleEffectAcrossReplay(
+  params: LifecycleReplay & { effectMock: CallMock },
+) {
+  await expectReplayCallCounts(params, [params.effectMock]);
 }
 
 export async function expectFeishuReplyPipelineDedupedAcrossReplay(
@@ -335,20 +303,16 @@ export function expectFeishuReplyDispatcherSentFinalReplyOnce(params: {
 export async function setupFeishuLifecycleHandler(params: {
   createEventDispatcherMock: {
     mockReturnValue: (value: unknown) => unknown;
-    mockReturnValueOnce: (value: unknown) => unknown;
   };
   runtime: RuntimeEnv;
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
   handlerKey: string;
   missingHandlerMessage: string;
-  once?: boolean;
 }): Promise<(data: unknown) => Promise<void>> {
   const dispatcher = new EventDispatcher({});
   const register = vi.spyOn(dispatcher, "register");
-  params.createEventDispatcherMock[params.once ? "mockReturnValueOnce" : "mockReturnValue"](
-    dispatcher,
-  );
+  params.createEventDispatcherMock.mockReturnValue(dispatcher);
   getFeishuRuntime().config.current = vi.fn(
     () => params.cfg,
   ) as unknown as PluginRuntime["config"]["current"];
