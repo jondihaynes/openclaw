@@ -1,6 +1,5 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -152,45 +151,29 @@ it.skipIf(process.platform === "win32").each(["model.json", "model.onnx"])(
     if (symlink) {
       await fs.symlink(fifo, input);
     }
-    let neededWriter = false;
-    let writer: ReturnType<typeof spawn> | undefined;
-    let writerExited = Promise.resolve();
-    // Rescue a regressed blocking open with EOF, so it fails instead of hanging the worker.
-    const rescue = setTimeout(() => {
-      neededWriter = true;
-      writer = spawn(
-        process.execPath,
-        [
-          "-e",
-          "const fs = require('node:fs'); fs.open(process.argv[1], 'w', (error, fd) => { if (error) throw error; fs.closeSync(fd); });",
-          fifo,
-        ],
-        { stdio: "ignore" },
-      );
-      writerExited = once(writer, "close").then(() => {});
-    }, 1000);
-    try {
-      const operation = filename === "model.json" ? resolveModelFiles(root, local) : verify();
-      await expect(operation).rejects.toThrow("model-integrity");
-      expect(neededWriter, "the regular-file refusal must not need an EOF writer").toBe(false);
-      expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
-      if (symlink) {
-        expect((await fs.lstat(input)).isSymbolicLink()).toBe(true);
+    const open = fs.open;
+    // A blocking-open regression must fail, not strand a libuv thread on the FIFO.
+    using _ = vi.spyOn(fs, "open").mockImplementation((targetPath, flags, mode) => {
+      if (typeof flags !== "number" || !(flags & fs.constants.O_NONBLOCK)) {
+        throw new Error("refusing a blocking FIFO open in the test");
       }
-    } finally {
-      clearTimeout(rescue);
-      writer?.kill("SIGKILL");
-      await writerExited;
+      return open(targetPath, flags, mode);
+    });
+    const operation = filename === "model.json" ? resolveModelFiles(root, local) : verify();
+    await expect(operation).rejects.toThrow("model-integrity");
+    expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
+    if (symlink) {
+      expect((await fs.lstat(input)).isSymbolicLink()).toBe(true);
     }
   },
 );
 
 it.each(["grows", "shrinks", "close fails"])("rejects when the artifact %s", async (change) => {
   await install();
-  const handle = await fs.open(target, "r");
+  await using handle = await fs.open(target, "r");
   const close = handle.close.bind(handle);
   const failure = new Error("model descriptor close failed");
-  const openSpy = vi.spyOn(fs, "open").mockResolvedValueOnce(handle);
+  using _ = vi.spyOn(fs, "open").mockResolvedValueOnce(handle);
   if (change === "close fails") {
     vi.spyOn(handle, "close").mockImplementationOnce(async () => {
       await close();
@@ -204,13 +187,8 @@ it.each(["grows", "shrinks", "close fails"])("rejects when the artifact %s", asy
       return before;
     });
   }
-  try {
-    const rejected = expect(verify()).rejects;
-    await (change === "close fails" ? rejected.toBe(failure) : rejected.toThrow("model-integrity"));
-  } finally {
-    openSpy.mockRestore();
-    await close();
-  }
+  const rejected = expect(verify()).rejects;
+  await (change === "close fails" ? rejected.toBe(failure) : rejected.toThrow("model-integrity"));
 });
 
 it("rejects local-export path traversal and mismatched source identity", async () => {
