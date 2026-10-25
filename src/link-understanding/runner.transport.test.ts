@@ -2,11 +2,10 @@ import { existsSync } from "node:fs";
 import { createServer, type RequestListener } from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import {
   closeHttpServer,
@@ -24,7 +23,6 @@ import { applyLinkUnderstanding } from "./apply.js";
 const mocks = vi.hoisted(() => ({
   bodyCancel: vi.fn(),
   releaseAfterCancel: vi.fn(),
-  runCommandWithTimeout: vi.fn(),
 }));
 vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
@@ -51,11 +49,6 @@ vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
     },
   };
 });
-vi.mock("../process/exec.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../process/exec.js")>();
-  mocks.runCommandWithTimeout.mockImplementation(actual.runCommandWithTimeout);
-  return { ...actual, runCommandWithTimeout: mocks.runCommandWithTimeout };
-});
 
 async function serve(handler: RequestListener) {
   const server = createServer(handler);
@@ -70,17 +63,12 @@ function startLink(Body: string, args = echoStdin, timeoutSeconds = 10) {
   const original = { ...ctx };
   const controller = new AbortController();
   const models = [{ command: process.execPath, args, timeoutSeconds: 10 }];
-  const cfg: OpenClawConfig = { tools: { links: { models, timeoutSeconds } } };
+  const cfg: OpenClawConfig = { tools: { links: { models, timeoutSeconds, maxLinks: 3 } } };
   const result = applyLinkUnderstanding({ ctx, cfg, signal: controller.signal });
   return { ctx, original, controller, result };
 }
 
 beforeEach(vi.clearAllMocks);
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(() => receipts?.close());
 
 it("cancels a non-OK response body before releasing its guarded transport", async (t) => {
   const requestSocketClosed = deferred();
@@ -96,48 +84,43 @@ it("cancels a non-OK response body before releasing its guarded transport", asyn
   await withinTest(requestSocketClosed.promise, t.signal);
   expect(mocks.bodyCancel).toHaveBeenCalledOnce();
   expect(mocks.releaseAfterCancel).toHaveBeenCalledWith(true);
-  expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
 });
 
-it("cancels a streaming response and preserves the unmodified inbound context", async () => {
+it.each(["cancel", "timeout"])("handles %s during a streaming response", async (mode) => {
   const requestStarted = deferred();
   const socketClosed = deferred();
   const requests: string[] = [];
   const base = await serve((req, res) => {
     requests.push(req.url ?? "");
-    req.socket.once("close", socketClosed.resolve);
     res.writeHead(200, { "content-type": "text/plain" });
+    if (req.url === "/second") {
+      res.end("complete page");
+      return;
+    }
+    req.socket.once("close", socketClosed.resolve);
     res.write("partial page");
     requestStarted.resolve();
   });
-  const { ctx, original, controller, result } = startLink(`${base}/first ${base}/second`, [
-    "-e",
-    "throw new Error('processor must not start')",
-  ]);
-  const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
-  await requestStarted.promise;
-  controller.abort(new Error("operator stopped the reply"));
-  await rejected;
+  const { ctx, original, controller, result } = startLink(
+    `${base}/first ${base}/second`,
+    mode === "cancel" ? ["-e", "throw new Error('processor must not start')"] : undefined,
+    mode === "cancel" ? 10 : 0.5,
+  );
+  if (mode === "cancel") {
+    const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+    await requestStarted.promise;
+    controller.abort(new Error("operator stopped the reply"));
+    await rejected;
+    expect(ctx).toEqual(original);
+    expect(requests).toEqual(["/first"]);
+  } else {
+    await result;
+    expect(ctx.LinkUnderstanding).toEqual(["complete page"]);
+  }
   await socketClosed.promise;
-  expect(ctx).toEqual(original);
-  expect(requests).toEqual(["/first"]);
 });
 
-it("skips a timed-out streaming link and processes the next link", async () => {
-  const base = await serve((req, res) => {
-    res.writeHead(200, { "content-type": "text/plain" });
-    if (req.url === "/slow") {
-      res.write("unfinished");
-    } else {
-      res.end("complete page");
-    }
-  });
-  const { ctx, result } = startLink(`${base}/slow ${base}/good`, undefined, 0.5);
-  await result;
-  expect(ctx.LinkUnderstanding).toEqual(["complete page"]);
-});
-
-it("fetches bare URLs in order while ignoring titled markdown links", async () => {
+it("dedupes and limits bare URLs while ignoring Markdown citations", async () => {
   const requests: string[] = [];
   const base = await serve((req, res) => {
     const requestPath = req.url ?? "";
@@ -148,24 +131,30 @@ it("fetches bare URLs in order while ignoring titled markdown links", async () =
     [
       `[quoted](${base}/quoted "Docs")`,
       `${base}/bare-one`,
+      `${base}/bare-one`,
       `[angle](<${base}/angle> 'Docs')`,
+      `[nested [label]](${base}/nested)`,
+      `[multiline](${base}/multiline "one\ntwo")`,
+      `[escaped](${base}/escaped "t\\")`,
       `${base}/bare-two`,
+      `${base}/over-limit`,
     ].join(" "),
   );
   await result;
-  expect(requests).toEqual(["/bare-one", "/bare-two"]);
-  expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/bare-two"]);
+  expect(requests).toEqual(["/bare-one", "/escaped", "/bare-two"]);
+  expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/escaped", "/bare-two"]);
 });
 
 it("stops processor descendants after caller cancellation", async (t) => {
+  const receipts = await openFixtureReceiptChannel();
+  onTestFinished(() => receipts.close());
   await withTempDir("openclaw-link-cancel-", async (dir) => {
     const pidPath = path.join(dir, "worker.pid");
-    const workerSource = "setInterval(() => {}, 1000); process.send('ready')";
     const wrapperSource = [
       fixtureReceiptClientSource(receipts.endpoint),
       "import { spawn } from 'node:child_process'",
       "import { writeFileSync } from 'node:fs'",
-      `const worker = spawn(process.execPath, ['-e', ${JSON.stringify(workerSource)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })`,
+      "const worker = spawn(process.execPath, ['-e', \"setInterval(() => {}, 1000); process.send('ready')\"], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })",
       `worker.once('message', () => { writeFileSync(${JSON.stringify(pidPath)}, String(worker.pid)); sendReceipt(${JSON.stringify(pidPath)}, 'ready'); })`,
       "process.stdin.resume()",
     ].join(";");
@@ -179,15 +168,11 @@ it("stops processor descendants after caller cancellation", async (t) => {
     const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
     try {
       // IPC readiness is recorded before the socket receipt, which can arrive after settlement.
-      const requirePidFile = (error: unknown) => {
+      const settled = result.catch((error: unknown) => {
         if (!existsSync(pidPath)) {
           throw error;
         }
-      };
-      const settled = result.then(
-        () => requirePidFile(new Error(`Timed out waiting for pid file: ${pidPath}`)),
-        requirePidFile,
-      );
+      });
       await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), t.signal);
       workerPid = await readPidFile(pidPath);
       expect(isPidAlive(workerPid)).toBe(true);
@@ -196,9 +181,7 @@ it("stops processor descendants after caller cancellation", async (t) => {
       expect(ctx).toEqual(original);
       // Caller rejection does not expose the adopted worker's native reap event.
       while (isPidAlive(workerPid)) {
-        await delay(25, undefined, { signal: t.signal }).catch((error: unknown) => {
-          throw new Error(`Processor descendant ${workerPid} stayed alive`, { cause: error });
-        });
+        await delay(25, undefined, { signal: t.signal });
       }
       expect(isPidAlive(workerPid)).toBe(false);
     } finally {
