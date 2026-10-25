@@ -32,6 +32,7 @@ vi.mock("node:dns/promises", async (importOriginal) => ({
   lookup,
 }));
 
+// mock-isolation: Capture diagnostics without creating process-global log sinks.
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({ info: loggerInfoMock }),
 }));

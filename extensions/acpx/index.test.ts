@@ -98,7 +98,9 @@ function createHarnessApi(options: Parameters<typeof createTestPluginApi>[0] = {
     api,
     getHarness(this: void, id: string) {
       const harness = harnesses.get(`acp-${id}`);
-      assert(harness?.loadModelCatalog, "Native catalog operation missing");
+      if (!harness || typeof harness.loadModelCatalog !== "function") {
+        throw new Error("Native catalog operation missing");
+      }
       return { ...harness, loadModelCatalog: harness.loadModelCatalog.bind(harness) };
     },
   };

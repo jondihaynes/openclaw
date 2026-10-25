@@ -78,6 +78,7 @@ async function flushHealthPreparation(collecting: Promise<unknown>) {
 }
 
 beforeAll(async () => {
+  // mock-isolation: Keep health collection on fixture config without loading live runtime config.
   vi.doMock("../../config/config.js", () => ({ getRuntimeConfig: () => testConfig }));
   vi.doMock("../../config/sessions/paths.js", () => ({
     resolveSessionStorePathCore: () => sessionStorePath,
