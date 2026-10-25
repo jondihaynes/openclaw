@@ -135,9 +135,6 @@
 }
 
 .dashboard-card {
-  /* Remember visited heights; unvisited cards use a 320px scroll estimate. */
-  content-visibility: auto;
-  contain-intrinsic-block-size: auto 320px;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
