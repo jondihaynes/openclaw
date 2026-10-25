@@ -2233,9 +2233,9 @@ function installControlUiMockGateway(
     method: string,
     params: unknown,
     socket: MockWebSocket,
-    respond: (response: unknown) => void,
+    respond: (response: unknown, deferred?: boolean) => void,
   ): (() => void) | undefined {
-    const complete = (response: unknown) => {
+    const complete = (response: unknown, deferred = false) => {
       if (
         scenario.subscriptionInitialHistory &&
         method === "sessions.messages.subscribe" &&
@@ -2253,22 +2253,29 @@ function installControlUiMockGateway(
         };
         // The nested read uses the same fixture and delay/error controls as chat.startup,
         // while the subscription remains the only request sent over the wire.
-        prepareResponse("chat.startup", historyParams, socket, (value) => {
+        prepareResponse("chat.startup", historyParams, socket, (value, historyDeferred) => {
           const history = commitFixtureResponse("chat.startup", historyParams, value);
-          respond({
-            ...response,
-            initialHistory:
-              isRecord(history) && isRecord(history["__mockError"])
-                ? { ok: false, error: history["__mockError"] }
-                : { ok: true, payload: history },
-          });
+          respond(
+            {
+              ...response,
+              initialHistory:
+                isRecord(history) && isRecord(history["__mockError"])
+                  ? { ok: false, error: history["__mockError"] }
+                  : { ok: true, payload: history },
+            },
+            deferred || historyDeferred,
+          );
         })?.();
         return;
       }
-      respond(response);
+      respond(response, deferred);
     };
     if (deferredRequests.shouldDefer(method, params)) {
-      deferredRequests.responses.push({ method, params, respond: complete });
+      deferredRequests.responses.push({
+        method,
+        params,
+        respond: (response) => complete(response, true),
+      });
       return undefined;
     }
     return () => {
@@ -2375,7 +2382,7 @@ function installControlUiMockGateway(
         return;
       }
       requests.push({ id, method, params: frame.params });
-      const respond = (response: unknown) => {
+      const respond = (response: unknown, deferred = false) => {
         const payload = commitFixtureResponse(method, frame.params, response);
         const mockError =
           isRecord(payload) && isRecord(payload["__mockError"]) ? payload["__mockError"] : null;
@@ -2389,6 +2396,10 @@ function installControlUiMockGateway(
         );
         if (!mockError) {
           emitTerminalOutput(this, method, frame.params, payload);
+        }
+        // A held reply acknowledges the RPC; its test owns later lifecycle events.
+        if (deferred) {
+          return;
         }
         if (!mockError && method === "connect" && this.readyState === MockWebSocket.OPEN) {
           this.tickTimer = window.setInterval(() => {

@@ -320,6 +320,8 @@ describe("chat typing status", () => {
     "renders $expectedText in the transcript",
     async ({ actors, expectedText, expectedAvatars }) => {
       const container = renderChatView({ typingActors: actors });
+      // The typing row loads lazily; finish its import before checking settled DOM.
+      await vi.dynamicImportSettled();
       await waitForSolid(() =>
         expect(container.querySelector(".agent-chat__typing-indicator--outside")).not.toBeNull(),
       );

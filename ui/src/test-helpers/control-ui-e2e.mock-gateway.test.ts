@@ -20,6 +20,25 @@ import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test
 const getGateway = (window: MockGatewayWindow) =>
   expectDefined(window.openclawControlUiE2eGateway, "Mock Gateway was not installed");
 
+it("keeps deferred abort replies separate from terminal events", async ({ gatewayPage }) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript({ deferredMethods: ["chat.abort"] }));
+  const { frames, send } = gatewayPage.connect();
+  await flushMockTimers();
+  send("held-abort", "chat.abort", { sessionKey: "agent:main:main", runId: "held-run" });
+  getGateway(gatewayPage.window).resolveDeferred("chat.abort", {
+    ok: true,
+    aborted: true,
+    runIds: ["held-run"],
+  });
+  expect(frames.find((frame) => frame.id === "held-abort")).toMatchObject({ ok: true });
+  expect(
+    frames.filter(
+      (frame) =>
+        frame.type === "event" && (frame.event === "chat" || frame.event === "sessions.changed"),
+    ),
+  ).toEqual([]);
+});
+
 it("retains separate startup responses unless subscription history is enabled", async ({
   gatewayPage,
 }) => {
