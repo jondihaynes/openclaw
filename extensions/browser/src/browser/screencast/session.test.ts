@@ -191,68 +191,55 @@ describe("browser screencast sessions", () => {
     );
   });
 
-  it.each(["event", "frame"])("fences pending policy (%s-triggered)", async (trigger) => {
-    const viewer = await attach();
-    const retired = page.cdp;
-    page.paint(9);
-    viewer.send.mockClear();
-    const policy = hold(check);
-    page.currentUrl = nextUrl;
-    if (trigger === "event") {
-      page.navigate(page.currentUrl);
+  it.each(["event blocked", "frame allowed", "stale blocked"])(
+    "fences %s navigation",
+    async (mode) => {
+      const viewer = await attach();
+      const retired = page.cdp;
+      page.paint(9);
+      viewer.send.mockClear();
+      retired.send.mockClear();
+      const policy = hold(check);
+      page.currentUrl = mode === "stale blocked" ? "https://blocked.test/" : nextUrl;
+      if (mode !== "frame allowed") {
+        page.navigate(page.currentUrl);
+        expect(retired.detach).toHaveBeenCalledOnce();
+      }
+      page.paint(10);
       expect(retired.detach).toHaveBeenCalledOnce();
-    }
-    page.paint(10);
-    expect(retired.detach).toHaveBeenCalledOnce();
-    expect(page.newCDPSession).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(50);
-    expect(viewer.frames()).toHaveLength(0);
-    expect(retired.send.mock.calls.map(([method]) => method)).toEqual(["Page.startScreencast"]);
-    if (trigger === "event") {
-      policy.reject(new Error("blocked"));
-      await flush();
-      page.paint(11);
+      expect(page.newCDPSession).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(50);
       expect(viewer.frames()).toHaveLength(0);
-      expect(viewer.close).toHaveBeenCalledWith(4003, "navigation_blocked");
+      expect(retired.send).not.toHaveBeenCalled();
+      if (mode === "stale blocked") {
+        const next = hold(check);
+        page.navigate(nextUrl);
+        policy.reject(new Error("blocked"));
+        await flush();
+        expect(page.newCDPSession).toHaveBeenCalledTimes(1);
+        await resume(next, undefined);
+      } else if (mode === "event blocked") {
+        policy.reject(new Error("blocked"));
+        await flush();
+      } else {
+        await resume(policy, undefined);
+      }
+      retired.paint(99, Buffer.from([0xff, 0xd8, 0x42, 0xff, 0xd9]));
+      expect(viewer.frames()).toHaveLength(0);
+      page.paint(100);
+      await vi.advanceTimersByTimeAsync(50);
       expect(retired.detach).toHaveBeenCalledOnce();
-    } else {
-      await resume(policy, undefined);
-      page.paint(11);
-      expect(viewer.frames()).toHaveLength(1);
-    }
-  });
-
-  it("never forwards delayed blocked-document pixels after a later allowed navigation", async () => {
-    const viewer = await attach();
-    const retired = page.cdp;
-    page.paint(1);
-    await vi.advanceTimersByTimeAsync(50);
-    viewer.send.mockClear();
-    retired.send.mockClear();
-    const blocked = hold(check);
-    page.navigate("https://blocked.test/");
-    expect.soft(retired.detach).toHaveBeenCalledOnce();
-    expect(page.newCDPSession).toHaveBeenCalledTimes(1);
-    retired.paint(10);
-    await vi.advanceTimersByTimeAsync(50);
-    expect.soft(retired.send).not.toHaveBeenCalled();
-
-    const next = hold(check);
-    page.navigate(nextUrl);
-    blocked.reject(new Error("blocked"));
-    await flush();
-    expect(page.newCDPSession).toHaveBeenCalledTimes(1);
-    await resume(next, undefined);
-    expect.soft(page.newCDPSession).toHaveBeenCalledTimes(2);
-
-    retired.paint(99, Buffer.from([0xff, 0xd8, 0x42, 0xff, 0xd9]));
-    expect(viewer.frames().map(parseScreencastFrame)).toEqual([]);
-    page.paint(100);
-    await vi.advanceTimersByTimeAsync(50);
-    expect(viewer.frames().map(parseScreencastFrame)).toEqual([expectedFrame(nextUrl)]);
-    expect(page.cdp.acks()).toEqual([["Page.screencastFrameAck", { sessionId: 100 }]]);
-    expect(viewer.close).not.toHaveBeenCalled();
-  });
+      if (mode === "event blocked") {
+        expect(viewer.frames()).toHaveLength(0);
+        expect(viewer.close).toHaveBeenCalledWith(4003, "navigation_blocked");
+      } else {
+        expect(page.newCDPSession).toHaveBeenCalledTimes(2);
+        expect(viewer.frames().map(parseScreencastFrame)).toEqual([expectedFrame(nextUrl)]);
+        expect(page.cdp.acks()).toEqual([["Page.screencastFrameAck", { sessionId: 100 }]]);
+        expect(viewer.close).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("checks the initial URL before ready or frames, and ignores stale navigation completions", async () => {
     const initial = hold(check);
