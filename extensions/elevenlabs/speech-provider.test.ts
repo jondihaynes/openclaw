@@ -73,34 +73,21 @@ describe("elevenlabs speech provider", () => {
   });
 
   it.each([
-    ["stability", "0", { stability: 0 }],
-    ["similarity", "Infinity", "invalid similarityBoost value"],
-    ["speed", "2.01", "speed must be between 0.5 and 2"],
-    ["speed", "invalid", undefined, false],
+    ["stability", "0", true, { overrides: { voiceSettings: { style: 0.25, stability: 0 } } }],
+    ["similarity", "Infinity", true, { warnings: ["invalid similarityBoost value"] }],
+    ["speed", "2.01", true, { warnings: ["speed must be between 0.5 and 2"] }],
+    ["speed", "invalid", false, {}],
   ] as const)(
     "preserves the %s=%s voice-setting directive",
-    (key, value, expected, allowed?: boolean) => {
-      const currentOverrides = { voiceId: "existing-voice", voiceSettings: { style: 0.25 } };
-      const allowVoiceSettings = allowed ?? true;
-      const parsed = provider.parseDirectiveToken?.({
-        key,
-        value,
-        policy: { ...DIRECTIVE_POLICY, allowVoiceSettings },
-        currentOverrides,
-      });
-
-      expect(parsed).toEqual(
-        !allowVoiceSettings
-          ? { handled: true }
-          : typeof expected === "string"
-            ? { handled: true, warnings: [expected] }
-            : {
-                handled: true,
-                overrides: {
-                  voiceSettings: { ...currentOverrides.voiceSettings, ...expected },
-                },
-              },
-      );
+    (key, value, allowVoiceSettings, expected) => {
+      expect(
+        provider.parseDirectiveToken?.({
+          key,
+          value,
+          policy: { ...DIRECTIVE_POLICY, allowVoiceSettings },
+          currentOverrides: { voiceId: "existing-voice", voiceSettings: { style: 0.25 } },
+        }),
+      ).toEqual({ handled: true, ...expected });
     },
   );
 
@@ -122,13 +109,13 @@ describe("elevenlabs speech provider", () => {
     await expect(
       provider.listVoices?.({ apiKey: "   ", providerConfig, timeoutMs: 1_000 }),
     ).rejects.toThrow("ElevenLabs API key missing");
-    await expect(provider.synthesize(blankRequest)).rejects.toThrow("ElevenLabs API key missing");
-    await expect(provider.streamSynthesize?.(blankRequest)).rejects.toThrow(
-      "ElevenLabs API key missing",
-    );
-    await expect(provider.synthesizeTelephony?.(blankRequest)).rejects.toThrow(
-      "ElevenLabs API key missing",
-    );
+    for (const synthesize of [
+      provider.synthesize,
+      provider.streamSynthesize,
+      provider.synthesizeTelephony,
+    ]) {
+      await expect(synthesize?.(blankRequest)).rejects.toThrow("ElevenLabs API key missing");
+    }
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
@@ -142,17 +129,16 @@ describe("elevenlabs speech provider", () => {
   });
 
   it("validates ElevenLabs voice ID length and character rules", () => {
-    const cases = [
-      { value: "a1b2c3d4e5", expected: true },
-      { value: "a".repeat(40), expected: true },
-      { value: "123456789", expected: false },
-      { value: "a".repeat(41), expected: false },
-      { value: "pMsXgVXv3BLz-gSXRplE", expected: false },
-      { value: "../../../etc/passwd", expected: false },
-      { value: "voice?param=value", expected: false },
-    ] as const;
-    for (const testCase of cases) {
-      expect(isValidElevenLabsVoiceId(testCase.value), testCase.value).toBe(testCase.expected);
+    for (const [value, expected] of [
+      ["a1b2c3d4e5", true],
+      ["a".repeat(40), true],
+      ["123456789", false],
+      ["a".repeat(41), false],
+      ["pMsXgVXv3BLz-gSXRplE", false],
+      ["../../../etc/passwd", false],
+      ["voice?param=value", false],
+    ] as const) {
+      expect(isValidElevenLabsVoiceId(value), value).toBe(expected);
     }
   });
 
@@ -183,17 +169,15 @@ describe("elevenlabs speech provider", () => {
     expect(sentRequest().url.searchParams.has("optimize_streaming_latency")).toBe(false);
   });
 
-  it.each([{ outputFormat: "future_123", fileExtension: ".bin", voiceCompatible: false }])(
-    "returns truthful $outputFormat metadata for a voice-note override",
-    async (expected) => {
-      const result = await provider.synthesize({
-        ...request,
-        providerOverrides: { outputFormat: expected.outputFormat },
-      });
-      expect(sentRequest().url.searchParams.get("output_format")).toBe(expected.outputFormat);
-      expect(result).toEqual({ audioBuffer: Buffer.from([1, 2, 3]), ...expected });
-    },
-  );
+  it("returns truthful future-format metadata for a voice-note override", async () => {
+    const expected = { outputFormat: "future_123", fileExtension: ".bin", voiceCompatible: false };
+    const result = await provider.synthesize({
+      ...request,
+      providerOverrides: { outputFormat: expected.outputFormat },
+    });
+    expect(sentRequest().url.searchParams.get("output_format")).toBe(expected.outputFormat);
+    expect(result).toEqual({ audioBuffer: Buffer.from([1, 2, 3]), ...expected });
+  });
 
   it("returns truthful stream metadata for an output override and releases the stream once", async () => {
     const cancel = vi.fn();

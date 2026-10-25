@@ -25,51 +25,38 @@ function resolveConfig(config: Record<string, unknown>) {
 }
 
 const sessions: ReturnType<typeof provider.createSession>[] = [];
-function createSession(
-  baseUrl: string,
-  options: Partial<RealtimeTranscriptionSessionCreateRequest> = {},
-) {
-  const session = provider.createSession({
-    ...options,
-    providerConfig: { apiKey: "fixture-value", baseUrl, ...options.providerConfig },
-  });
-  sessions.push(session);
-  return session;
-}
-
 const committed = { message_type: "committed_transcript", text: "yes" };
 const timestamped = { message_type: "committed_transcript_with_timestamps", text: "yes" };
 const committedNo = { ...committed, text: "no" };
 const timestampedNo = { ...timestamped, text: "no" };
 const partial = (text: string) => ({ message_type: "partial_transcript", text });
+const deliveryMarker = "transcript frames delivered";
 
 let cleanup: (() => Promise<void>) | undefined;
 
-async function createRealtimeServer(
-  onRequest: (url: URL) => void,
-  options?: {
+async function createSession(
+  options: {
+    onRequest?: (url: URL) => void;
     initialEvent?: Record<string, unknown>;
     events?: readonly Record<string, unknown>[];
     eventsByConnection?: readonly (readonly Record<string, unknown>[])[];
     closeAfterEvents?: boolean;
-  },
+  } = {},
+  sessionOptions: Partial<RealtimeTranscriptionSessionCreateRequest> = {},
 ) {
   const server = createServer();
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  const wss = new WebSocketServer({ server, maxPayload: 1024 * 1024 });
   let connectionCount = 0;
-  server.on("upgrade", (request, socket, head) => {
-    onRequest(new URL(request.url ?? "/", "http://127.0.0.1"));
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      ws.send(JSON.stringify(options?.initialEvent ?? { message_type: "session_started" }));
-      const events = options?.eventsByConnection?.[connectionCount] ?? options?.events ?? [];
-      connectionCount += 1;
-      for (const event of events) {
-        ws.send(JSON.stringify(event));
-      }
-      if (options?.closeAfterEvents) {
-        ws.close();
-      }
-    });
+  wss.on("connection", (ws, request) => {
+    options.onRequest?.(new URL(request.url ?? "/", "http://127.0.0.1"));
+    ws.send(JSON.stringify(options.initialEvent ?? { message_type: "session_started" }));
+    const events = options.eventsByConnection?.[connectionCount++] ?? options.events ?? [];
+    for (const event of events) {
+      ws.send(JSON.stringify(event));
+    }
+    if (options.closeAfterEvents) {
+      ws.close();
+    }
   });
   const port = await listenOnLoopback(server);
   cleanup = async () => {
@@ -83,7 +70,16 @@ async function createRealtimeServer(
       server.close(() => resolve());
     });
   };
-  return `http://127.0.0.1:${port}`;
+  const session = provider.createSession({
+    ...sessionOptions,
+    providerConfig: {
+      apiKey: "fixture-value",
+      baseUrl: `http://127.0.0.1:${port}`,
+      ...sessionOptions.providerConfig,
+    },
+  });
+  sessions.push(session);
+  return session;
 }
 
 describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
@@ -124,16 +120,18 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
 
   it("connects through the public session boundary with the configured URL params", async () => {
     const requests: URL[] = [];
-    const baseUrl = await createRealtimeServer((url) => requests.push(url));
-    const session = createSession(baseUrl, {
-      providerConfig: {
-        modelId: "scribe_v2_realtime",
-        audioFormat: "ulaw_8000",
-        sampleRate: 8000,
-        commitStrategy: "vad",
-        languageCode: "en",
+    const session = await createSession(
+      { onRequest: (url) => requests.push(url) },
+      {
+        providerConfig: {
+          modelId: "scribe_v2_realtime",
+          audioFormat: "ulaw_8000",
+          sampleRate: 8000,
+          commitStrategy: "vad",
+          languageCode: "en",
+        },
       },
-    });
+    );
 
     await session.connect();
     session.close();
@@ -146,31 +144,28 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     expect(requests[0]?.searchParams.get("language_code")).toBe("en");
   });
 
-  it("reports ready-state input_error errors exactly once", async () => {
-    const message = "legacy provider rejected the input";
-    const baseUrl = await createRealtimeServer(() => undefined, {
-      events: [{ message_type: "input_error", message }],
-    });
-    const onError = vi.fn();
-    const session = createSession(baseUrl, { onError });
-    await session.connect();
-    await vi.waitFor(() =>
-      expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message })),
-    );
-  });
-
-  it("rejects pre-ready provider errors with their original actionable detail", async () => {
-    const message = "rate limit exceeded; retry after account reset";
-    const baseUrl = await createRealtimeServer(() => undefined, {
-      initialEvent: { message_type: "rate_limited", error: message },
-      closeAfterEvents: true,
-    });
-    const onError = vi.fn();
-    const session = createSession(baseUrl, { onError });
-
-    await expect(session.connect()).rejects.toThrow(message);
-    expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
-  });
+  it.each([false, true])(
+    "reports provider errors exactly once (pre-ready: %s)",
+    async (preReady) => {
+      const message = "rate limit exceeded; retry after account reset";
+      const event = preReady
+        ? { message_type: "rate_limited", error: message }
+        : { message_type: "input_error", message };
+      const onError = vi.fn();
+      const session = await createSession(
+        preReady ? { initialEvent: event, closeAfterEvents: true } : { events: [event] },
+        { onError },
+      );
+      if (preReady) {
+        await expect(session.connect()).rejects.toThrow(message);
+      } else {
+        await session.connect();
+      }
+      await vi.waitFor(() =>
+        expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message })),
+      );
+    },
+  );
 
   it.each<[string, (typeof committed)[], string[], string[]]>([
     ["preserves identical adjacent commits", [committed, committed], ["yes", "yes"], []],
@@ -190,15 +185,14 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
       [],
     ],
   ])("%s", async (_name, events, transcripts, partials) => {
-    const deliveryMarker = "transcript frames delivered";
-    const baseUrl = await createRealtimeServer(() => undefined, {
-      events: [...events, partial(deliveryMarker)],
-    });
     const onError = vi.fn();
     const onPartial = vi.fn();
     const onSpeechStart = vi.fn();
     const onTranscript = vi.fn();
-    const session = createSession(baseUrl, { onError, onPartial, onSpeechStart, onTranscript });
+    const session = await createSession(
+      { events: [...events, partial(deliveryMarker)] },
+      { onError, onPartial, onSpeechStart, onTranscript },
+    );
 
     await session.connect();
     await vi.waitFor(() => expect(onPartial).toHaveBeenCalledWith(deliveryMarker));
@@ -211,15 +205,17 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   it("does not suppress a timestamp-only transcript from a replacement session", async () => {
     const firstMarker = "first session delivered";
     const secondMarker = "replacement session delivered";
-    const baseUrl = await createRealtimeServer(() => undefined, {
-      eventsByConnection: [
-        [committed, partial(firstMarker)],
-        [timestamped, partial(secondMarker)],
-      ],
-    });
     const onPartial = vi.fn();
     const onTranscript = vi.fn();
-    const session = createSession(baseUrl, { onPartial, onTranscript });
+    const session = await createSession(
+      {
+        eventsByConnection: [
+          [committed, partial(firstMarker)],
+          [timestamped, partial(secondMarker)],
+        ],
+      },
+      { onPartial, onTranscript },
+    );
 
     await session.connect();
     await vi.waitFor(() => expect(onPartial).toHaveBeenCalledWith(firstMarker));
