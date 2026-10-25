@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { resolveProviderConfigSecretInput } from "../../agents/model-auth-provider-config.js";
+import type { completeWithPreparedSimpleCompletionModel as Complete } from "../../agents/simple-completion-execution.js";
 import { completionModelDefinition } from "../../agents/simple-completion.test-support.js";
 import {
   getRuntimeConfigSourceSnapshot,
@@ -25,24 +26,15 @@ const hoisted = vi.hoisted(() => {
   const rawCfg: OpenClawConfig = {};
   return {
     rawCfg,
-    completeWithPreparedSimpleCompletionModel: vi.fn(
-      async (
-        _params: Parameters<
-          typeof import("../../agents/simple-completion-execution.js").completeWithPreparedSimpleCompletionModel
-        >[0],
-      ) => ({
-        content: [{ type: "text", text: "synthetic-ok" }],
-      }),
-    ),
-    emitJsonOrText: vi.fn(),
+    complete: vi.fn(async (_params: Parameters<typeof Complete>[0]) => ({
+      content: [{ type: "text", text: "synthetic-ok" }],
+    })),
+    emit: vi.fn(),
   };
 });
 
-const completeMock = hoisted.completeWithPreparedSimpleCompletionModel;
-const emitMock = hoisted.emitJsonOrText;
-
 vi.mock("../../agents/simple-completion-execution.js", () => ({
-  completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
+  completeWithPreparedSimpleCompletionModel: hoisted.complete,
 }));
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
@@ -64,7 +56,7 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 }));
 
 vi.mock("./output.js", () => ({
-  emitJsonOrText: hoisted.emitJsonOrText,
+  emitJsonOrText: hoisted.emit,
   formatEnvelopeForText: vi.fn(),
   providerSummaryText: vi.fn(),
 }));
@@ -127,14 +119,13 @@ async function runLocalModelRun(model: string): Promise<void> {
 }
 
 function expectCompletionAuth(source: string, value: string) {
-  expect(completeMock).toHaveBeenCalledTimes(1);
-  const auth = completeMock.mock.calls.at(-1)?.[0]?.auth;
+  expect(hoisted.complete).toHaveBeenCalledTimes(1);
+  const auth = hoisted.complete.mock.calls.at(-1)?.[0]?.auth;
   expect(auth?.source).toBe(source);
   expect(looksLikeSecretSentinel(auth?.apiKey ?? "")).toBe(true);
   expect(resolveSecretSentinel(auth?.apiKey ?? "")).toBe(value);
 }
 
-let agentDir = "";
 let state: OpenClawTestState;
 const seedProfiles = (profiles: AuthProfileStore["profiles"]) =>
   state.writeAuthProfiles({ version: 1, profiles }, "ops");
@@ -148,12 +139,11 @@ beforeEach(async () => {
       [ENV_MISSING_KEY]: undefined,
     },
   });
-  agentDir = state.agentDir("ops");
-  hoisted.rawCfg = buildRawCfg(agentDir);
+  hoisted.rawCfg = buildRawCfg(state.agentDir("ops"));
   // Pin the authored source as CLI boot does; resolved bytes alone lose SecretRef provenance.
   setRuntimeConfigSnapshot(structuredClone(hoisted.rawCfg), structuredClone(hoisted.rawCfg));
-  completeMock.mockClear();
-  emitMock.mockClear();
+  hoisted.complete.mockClear();
+  hoisted.emit.mockClear();
 });
 
 afterEach(async () => {
@@ -181,7 +171,7 @@ it.each(["config", "account", "unavailable sibling"] as const)(
     });
     await runLocalModelRun(`${fromConfig ? "customcfg" : "customacct"}/test-model`);
     if (fromConfig) {
-      expect(emitMock).toHaveBeenCalledTimes(1);
+      expect(hoisted.emit).toHaveBeenCalledTimes(1);
       const source = getRuntimeConfigSourceSnapshot() ?? undefined;
       const { ref } = resolveProviderConfigSecretInput(source, "customcfg");
       expect(ref).toMatchObject({ source: "env", id: ENV_CONFIG_KEY });
@@ -201,5 +191,5 @@ it("fails closed when the selected account SecretRef is unavailable", async () =
   await expect(runLocalModelRun("customacct/test-model")).rejects.toThrow(
     /Auth lookup failed for provider "customacct": .*customacct:healthy.*is configured but unavailable \(secret reference was not found\)/,
   );
-  expect(completeMock).not.toHaveBeenCalled();
+  expect(hoisted.complete).not.toHaveBeenCalled();
 });

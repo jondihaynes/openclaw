@@ -156,11 +156,10 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
           const start = async (managed = false) => {
             const command = new Command();
             registerModelCapabilityCommands(command);
-            const execute = async () => {
-              await command.parseAsync(["model", "run", "--prompt", "hello", "--json"], {
+            const execute = () =>
+              command.parseAsync(["model", "run", "--prompt", "hello", "--json"], {
                 from: "user",
               });
-            };
             const run = managed ? parent.track(execute) : execute();
             await awaitGateBeforeSettlement(
               arrivals[pending.push(run) - 1]!.promise,
@@ -208,8 +207,7 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
             }
             await second;
             await drainage;
-            const emitted = output.mock.calls.map(([value]) => value);
-            expect(JSON.stringify(emitted)).toContain("reply-1");
+            expect(JSON.stringify(output.mock.calls.map(([value]) => value))).toContain("reply-1");
             const buildsBeforeThird = builds.mock.calls.length;
             const { run: third } = await start();
             expect(builds.mock.calls.length).toBe(buildsBeforeThird + 1);
