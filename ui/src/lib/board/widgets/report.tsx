@@ -1,4 +1,4 @@
-import { createMemo, createProjection, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { parseBoardReport, type BoardReport } from "../../../../../src/boards/board-report.ts";
 import { BoardWidgetError } from "../../../components/board/board-widget-error.tsx";
 import { registerBoardDocumentEnglish } from "../../../i18n/locales/en-board-document.ts";
@@ -173,14 +173,22 @@ function ReportBlockView(props: { block: ReportBlock }) {
 }
 
 function ReportWidgetContent(props: ReportWidgetProps) {
-  const data = createProjection(() => ({ props: props.widget?.props }), null, { key: null });
-  const content = createMemo(() => {
-    try {
-      return { report: parseBoardReport(data.props) };
-    } catch (error) {
-      return { error };
-    }
-  });
+  const content = createMemo(
+    () => {
+      try {
+        return { report: parseBoardReport(props.widget?.props) };
+      } catch (error) {
+        return { error };
+      }
+    },
+    {
+      // Keep parsed content and focus when only the widget metadata changes.
+      equals: (previous, next) =>
+        previous.report !== undefined &&
+        next.report !== undefined &&
+        JSON.stringify(previous.report) === JSON.stringify(next.report),
+    },
+  );
   return (
     <Show when={content().report} fallback={<BoardWidgetError error={content().error} />}>
       {(report) => (
