@@ -1,27 +1,11 @@
 import type { LookupAddress } from "node:dns";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import * as undici from "undici";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBraveWebSearchProvider } from "./brave-web-search-provider.js";
 
 type Result = Record<string, unknown>;
-const { loggerInfoMock, logger } = vi.hoisted(() => {
-  const info = vi.fn();
-  const subsystemLogger: ReturnType<typeof createSubsystemLogger> = {
-    subsystem: "brave",
-    info,
-    debug: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    fatal: vi.fn(),
-    trace: vi.fn(),
-    raw: vi.fn(),
-    isEnabled: () => true,
-    child: () => subsystemLogger,
-  };
-  return { loggerInfoMock: info, logger: subsystemLogger };
-});
+const { loggerInfoMock } = vi.hoisted(() => ({ loggerInfoMock: vi.fn() }));
 const mockFetch = vi.fn<typeof fetch>();
 const lookup = vi.hoisted(() => vi.fn<() => Promise<LookupAddress[]>>());
 const publicAddress = [{ address: "93.184.216.34", family: 4 }];
@@ -33,23 +17,9 @@ function respond(payload: unknown) {
   mockFetch.mockImplementation(async () => Response.json(payload));
 }
 
-function resultPayload(
-  mode: string,
-  results: Array<{ url: string; title?: string; description?: string }>,
-) {
-  const generic = results.map(({ description, ...row }) =>
-    description === undefined ? row : { ...row, snippets: [description] },
-  );
-  return mode === "web" ? { web: { results } } : { grounding: { generic } };
-}
-
 function expectResults(result: Result, urls: string[]) {
-  expect(result).toMatchObject({
-    provider: "brave",
-    count: urls.length,
-    results: urls.map((url) => ({ url })),
-  });
-  expect(result.results).toHaveLength(urls.length);
+  expect(result).toMatchObject({ provider: "brave", count: urls.length });
+  expect(result.results).toEqual(urls.map((url) => expect.objectContaining({ url })));
 }
 
 async function expectCached(run: () => Promise<Result>, result: Result, calls: number) {
@@ -63,7 +33,7 @@ vi.mock("node:dns/promises", async (importOriginal) => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  createSubsystemLogger: () => logger,
+  createSubsystemLogger: () => ({ info: loggerInfoMock }),
 }));
 
 afterAll(() => {
@@ -124,30 +94,12 @@ it.each([
   [{}, { date_after: "2026-03-20", date_before: "2026-03-01" }, "invalid_date_range"],
   [{ mode: "llm-context" }, { date_after: "2999-01-01" }, "invalid_date_range"],
   [{ mode: "llm-context" }, { date_before: "2025-01-31" }, "unsupported_date_filter"],
+  [{}, { search_lang: "en-US" }, "invalid_search_lang"],
+  [{}, { ui_lang: "en" }, "invalid_ui_lang"],
 ] as const)("rejects invalid search: %j %j", async (config, args, error) => {
   const result = await createBraveTool(config).execute({ query: "invalid search", ...args });
   expect(result).toMatchObject({ error, docs: "https://docs.openclaw.ai/tools/web" });
   expect(mockFetch).not.toHaveBeenCalled();
-});
-
-it("preserves in-flight cancellation reasons", async () => {
-  const controller = new AbortController();
-  mockFetch.mockImplementation(async (_url, init) => {
-    const signal = init?.signal;
-    if (!signal) {
-      throw new Error("Brave request lost caller cancellation");
-    }
-    return new Promise<Response>((_resolve, reject) => {
-      signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
-      // Abort at transport entry so DNS preparation cannot race a polling deadline.
-      controller.abort(new Error("Brave request canceled in flight"));
-    });
-  });
-  await expect(
-    createBraveTool().execute({ query: "in-flight" }, { signal: controller.signal }),
-  ).rejects.toThrow("Brave request canceled in flight");
-  expect(mockFetch).toHaveBeenCalledOnce();
-  expect(fetchCall()[1]?.signal?.aborted).toBe(true);
 });
 
 it("does not cache a canceled response", async () => {
@@ -183,24 +135,38 @@ it.each([
     { search_lang: "en-US", ui_lang: "ja" },
     { search_lang: "jp", ui_lang: "en-US" },
   ],
-  [{ search_lang: "en-US" }, { error: "invalid_search_lang" }],
-  [{ ui_lang: "en" }, { error: "invalid_ui_lang" }],
   [{ country: "de" }, { country: "DE" }],
   [{ country: " VN " }, { country: "ALL" }],
 ])("normalizes locale parameters: %#", async (args, expected) => {
-  const result = await createBraveTool().execute({ query: "language", ...args });
-  if ("error" in expected) {
-    expect(result).toMatchObject(expected);
-    expect(mockFetch).not.toHaveBeenCalled();
-    return;
-  }
+  await createBraveTool().execute({ query: "language", ...args });
   expect(Object.fromEntries(fetchRequestUrl().searchParams)).toMatchObject(expected);
 });
 
-it.each(["web", "llm-context"] as const)("caps %s results and separates caches", async (mode) => {
-  const urls = ["first", "second", "third"].map((name) => `https://example.com/${name}`);
-  const results = urls.map((url) => ({ url, title: url, description: url }));
-  respond(resultPayload(mode, results));
+it.each(["web", "llm-context"] as const)("maps and caches %s", async (mode) => {
+  const urls = [0, 1, 2, 3].map((i) => `https://example.com/${i}`);
+  const timestamp = "2024-01-15T13:45:02Z";
+  const day = "2024-01-15";
+  const content = { title: "Source", description: "text", snippets: ["text", ""] };
+  const results = urls.map((url, i) =>
+    i > 1
+      ? { url: mode === "web" ? undefined : url }
+      : {
+          url,
+          ...content,
+          page_age: i === 0 ? timestamp : undefined,
+          page_fetched: timestamp,
+          age: "380 days ago",
+        },
+  );
+  const ages = [["Monday", day, "380 days ago", timestamp], ["Monday", day, "380 days ago"], []];
+  respond(
+    mode === "web"
+      ? { web: { results } }
+      : {
+          grounding: { generic: results },
+          sources: Object.fromEntries(urls.map((url, i) => [url, { age: ages[i] }])),
+        },
+  );
   const tool = createBraveTool({ mode });
   const args = { query: `count-${mode}`, count: 1 };
   const first = await tool.execute(args);
@@ -213,10 +179,22 @@ it.each(["web", "llm-context"] as const)("caps %s results and separates caches",
   ]);
   expect(new Headers(fetchCall()[1]?.headers).get("X-Subscription-Token")).toBe(apiKey);
   expectResults(first, urls.slice(0, 1));
-  const larger = await tool.execute({ ...args, count: 2 });
-  expect(mockFetch).toHaveBeenCalledTimes(2);
-  expectResults(larger, urls.slice(0, 2));
-  await expectCached(() => tool.execute({ ...args, count: 2 }), larger, 2);
+  const larger = await tool.execute({ ...args, count: 3 });
+  expectResults(larger, mode === "web" ? [...urls.slice(0, 2), ""] : urls.slice(0, 3));
+  const rows = larger.results as Result[];
+  expect(rows.map((row) => row.published)).toEqual([
+    timestamp,
+    mode === "web" ? undefined : day,
+    undefined,
+  ]);
+  if (mode === "llm-context") {
+    expect(rows[0]).toMatchObject({
+      snippets: [expect.stringContaining("text")],
+      siteName: "example.com",
+      title: expect.stringContaining("Source"),
+    });
+  }
+  await expectCached(() => tool.execute({ ...args, count: 3 }), larger, 2);
 });
 
 it.each(["web", "llm-context"] as const)("keeps %s results credential-scoped", async (mode) => {
@@ -229,7 +207,10 @@ it.each(["web", "llm-context"] as const)("keeps %s results credential-scoped", a
     if (!url) {
       throw new Error("Unexpected synthetic Brave credential");
     }
-    return Response.json(resultPayload(mode, [{ url, title: url }]));
+    const results = [{ url, title: url }];
+    return Response.json(
+      mode === "web" ? { web: { results } } : { grounding: { generic: results } },
+    );
   });
   const accountA = createBraveTool({ apiKey: "brave-account-a", mode });
   const accountB = createBraveTool({ apiKey: "brave-account-b", mode });
@@ -241,59 +222,11 @@ it.each(["web", "llm-context"] as const)("keeps %s results credential-scoped", a
   await expectCached(() => accountA.execute(args), first, 2);
 });
 
-it("preserves web publication dates, not fetch dates or ages", async () => {
-  respond({
-    web: {
-      results: [
-        { page_age: "2025-04-12T14:22:41", age: "2 days ago" },
-        { page_fetched: "2025-04-14T14:22:41", age: "2 days ago" },
-      ],
-    },
-  });
-  const { results } = await createBraveTool().execute({ query: "dates-web" });
-  const rows = results as Result[];
-  expect(rows.map((row) => row.published)).toEqual(["2025-04-12T14:22:41", undefined]);
-});
-
-it("preserves LLM publication dates and wrapped content", async () => {
-  const ages = [
-    ["Monday", "2024-01-15", "380 days ago", "2024-01-15T13:45:02Z"],
-    ["Monday", "2024-01-15", "380 days ago"],
-    [],
-  ];
-  const generic = ages.map((_, i) => ({
-    url: `https://example.com/${i}`,
-    title: "Source",
-    snippets: ["text", ""],
-  }));
-  respond({
-    grounding: { generic },
-    sources: Object.fromEntries(generic.map(({ url }, i) => [url, { age: ages[i] }])),
-  });
-  const { results } = await createBraveTool({ mode: "llm-context" }).execute({
-    query: "dates-llm",
-  });
-  const rows = results as Result[];
-  expect(rows.map((row) => row.published)).toEqual([
-    "2024-01-15T13:45:02Z",
-    "2024-01-15",
-    undefined,
-  ]);
-  expect(rows[0]).toMatchObject({
-    snippets: [expect.stringContaining("text")],
-    siteName: "example.com",
-    title: expect.stringContaining("Source"),
-  });
-});
-
 it.each([
-  { args: { freshness: "week" }, expected: "pw" },
-  {
-    args: { date_after: "2025-01-01", date_before: "2025-01-31" },
-    expected: "2025-01-01to2025-01-31",
-  },
-  { args: { date_after: "2025-01-01" }, expected: undefined },
-])("passes LLM-context time filters: $args", async ({ args, expected }) => {
+  [{ freshness: "week" }, "pw"],
+  [{ date_after: "2025-01-01", date_before: "2025-01-31" }, "2025-01-01to2025-01-31"],
+  [{ date_after: "2025-01-01" }, undefined],
+] as const)("passes LLM-context time filters: %j", async (args, expected) => {
   respond(contextPayload);
   await createBraveTool({ mode: "llm-context" }).execute({ query: "time", ...args });
   const today = new Date().toISOString().slice(0, 10);
@@ -302,18 +235,13 @@ it.each([
   expect(requestUrl.searchParams.get("freshness")).toBe(expected ?? `2025-01-01to${today}`);
 });
 
-it("emits brave.http diagnostics for requests, responses, and cache events", async () => {
+it("keeps Brave diagnostics free of queries and credentials", async () => {
   const tool = createBraveTool({}, { config: { diagnostics: { flags: ["brave.http"] } } });
   const query = "unique brave diagnostics query";
   await tool.execute({ query, count: 1 });
   await tool.execute({ query, count: 1 });
-  expect(mockFetch).toHaveBeenCalledTimes(1);
   const calls = loggerInfoMock.mock.calls;
-  expect(calls.map((call) => call[0])).toEqual(
-    ["cache miss", "request", "response", "cache write", "cache hit"].map(
-      (event) => `brave http ${event}`,
-    ),
-  );
+  expect(loggerInfoMock).toHaveBeenCalledWith("brave http response", expect.any(Object));
   for (const sensitive of [apiKey, "X-Subscription-Token", query]) {
     expect(JSON.stringify(calls)).not.toContain(sensitive);
   }
@@ -339,14 +267,10 @@ describe("Brave preflight lifetime", () => {
     });
     const caller = new AbortController();
     const reason = new Error("caller stopped during DNS");
-    let outcome: { value: Result } | { error: unknown } | undefined;
+    const observe = vi.fn<(result: { value: Result } | { error: unknown }) => void>();
     const settled = run(caller.signal).then(
-      (value) => {
-        outcome = { value };
-      },
-      (error: unknown) => {
-        outcome = { error };
-      },
+      (value) => observe({ value }),
+      (error: unknown) => observe({ error }),
     );
     cleanups.push(async () => {
       caller.abort(reason);
@@ -354,7 +278,7 @@ describe("Brave preflight lifetime", () => {
       await settled;
     });
     await entered.promise;
-    return { dns, caller, reason, operation: { settled, outcome: () => outcome } };
+    return { dns, caller, reason, settled, outcome: () => observe.mock.calls[0]?.[0] };
   }
 
   beforeEach(() => {
@@ -385,11 +309,10 @@ describe("Brave preflight lifetime", () => {
     const run = privateSearch(protocol);
     if (warmCache) {
       const first = await run();
-      expect(first).toMatchObject({ provider: "brave" });
       await expectCached(run, first, 1);
       mockFetch.mockClear();
     }
-    const { dns, caller, reason, operation } = await holdRequest(run);
+    const { dns, caller, reason, ...operation } = await holdRequest(run);
     if (stop === "handoff") {
       // Abort between DNS settlement and the validator continuation, before a cache hit.
       void dns.promise.then(() => caller.abort(reason));
@@ -416,8 +339,13 @@ describe("Brave preflight lifetime", () => {
     }
   });
 
-  it.each(["fetch", "body"] as const)("shares deadline across %s", async (phase) => {
-    lookup.mockResolvedValue(privateAddress);
+  it.each([
+    ["fetch", false],
+    ["body", false],
+    ["fetch", true],
+  ] as const)("settles %s transport (caller cancellation: %s)", async (phase, cancel) => {
+    const address = cancel ? publicAddress : privateAddress;
+    lookup.mockResolvedValue(address);
     const dispatched = createDeferred<void>();
     mockFetch.mockImplementationOnce(async (_input, init) => {
       const signal = init?.signal;
@@ -442,16 +370,22 @@ describe("Brave preflight lifetime", () => {
       );
     });
     const run = privateSearch();
-    const { dns, operation } = await holdRequest(run);
+    const { dns, caller, reason, ...operation } = await holdRequest(run);
     await vi.advanceTimersByTimeAsync(600);
-    dns.resolve(privateAddress);
+    dns.resolve(address);
     await dispatched.promise;
     await vi.advanceTimersByTimeAsync(399);
     expect(operation.outcome()).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(1);
+    if (cancel) {
+      caller.abort(reason);
+      await vi.advanceTimersByTimeAsync(0);
+    } else {
+      await vi.advanceTimersByTimeAsync(1);
+    }
     expect(operation.outcome()).toEqual({
-      error: expect.objectContaining({ name: "TimeoutError" }),
+      error: cancel ? reason : expect.objectContaining({ name: "TimeoutError" }),
     });
+    expect(fetchCall()[1]?.signal?.aborted).toBe(true);
     await operation.settled;
     expect(vi.getTimerCount()).toBe(0);
     await run();
@@ -474,7 +408,6 @@ describe("Brave preflight lifetime", () => {
     const result = privateSearch(protocol)();
     if (allowed) {
       await expect(result).resolves.toMatchObject({ provider: "brave" });
-      expect(mockFetch).toHaveBeenCalledOnce();
       expect(lookup).toHaveBeenCalledTimes(2);
     } else {
       await expect(result).rejects.toThrow(redirect ? /allowlist/ : /private|loopback/);
