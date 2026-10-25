@@ -43,6 +43,7 @@ export function MicrophoneActivity(props: MicrophoneActivityProps) {
     <openclaw-microphone-activity
       class="agent-chat__voice-activity"
       data-level={String(level())}
+      style={{ "--talk-input-level": String(level()) }}
       data-status={
         props.status === "connecting" || props.status === "thinking" ? props.status : "listening"
       }
@@ -55,7 +56,7 @@ export function MicrophoneActivity(props: MicrophoneActivityProps) {
             class="agent-chat__voice-activity-bar"
             style={{
               "--talk-bar-delay": `${index() * -70}ms`,
-              "--talk-bar-scale": String(0.18 + level() * gain * 0.82),
+              "--talk-bar-gain": String(gain),
             }}
           />
         )}
