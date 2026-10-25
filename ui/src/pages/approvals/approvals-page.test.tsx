@@ -19,21 +19,24 @@ import {
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ApprovalsPage } from "./approvals-page.tsx";
 
-const historyText = (page: HTMLElement) =>
-  page.querySelector(".approval-history-table")?.textContent;
-const grantsText = (page: HTMLElement) => page.querySelector(".standing-grants-table")?.textContent;
-const grantButton = (page: HTMLElement) =>
-  page.querySelector<HTMLButtonElement>(".standing-grants-table button");
-const waitForHistory = (page: HTMLElement, text: string) =>
-  waitForSolid(() => expect(historyText(page)).toContain(text));
-const waitForGrants = (page: HTMLElement, text: string) =>
-  waitForSolid(() => expect(grantsText(page)).toContain(text));
+const historyTable = ".approval-history-table";
+const grantsTable = ".standing-grants-table";
 const oldAutomation = "Old Gateway automation";
 const currentAutomation = "Current Gateway automation";
 function operatorAuth(scopes?: string[], recoveryScope?: string) {
   return { role: "operator", scopes, recoveryScope };
 }
 const grantReply = (name: string) => ({ grants: [standingGrant(name)] });
+const emptyHistory = () => Promise.resolve({ items: [] });
+const historyReply = (id: string, time: number, nextCursor?: string) => ({
+  items: [terminal(id, time)],
+  ...(nextCursor ? { nextCursor } : {}),
+});
+
+function expectButton(button: HTMLButtonElement, disabled: boolean, text: string) {
+  expect(button.disabled).toBe(disabled);
+  expect(button.textContent).toContain(text);
+}
 
 function replyOnce(...values: unknown[]) {
   const request = vi.fn();
@@ -60,12 +63,17 @@ function terminal(id: string, resolvedAtMs: number): ApprovalHistoryResult["item
 }
 
 function createPage(
-  history: (method: string, params?: unknown) => unknown,
+  history: (method: string, params?: unknown) => unknown = emptyHistory,
   auth?: { role: string; scopes?: string[]; recoveryScope?: string },
   grants: () => unknown = () => Promise.resolve({ grants: [] }),
+  revoke?: () => unknown,
 ) {
   const request = vi.fn((method: string, params?: unknown) =>
-    method === "exec.approval.grants.list" ? grants() : history(method, params),
+    method === "exec.approval.grants.list"
+      ? grants()
+      : method === "exec.approval.grants.revoke" && revoke
+        ? revoke()
+        : history(method, params),
   );
   const client = createTestGatewayClient(request);
   const initialGateway = createApplicationGateway({
@@ -82,10 +90,24 @@ function createPage(
   const { container: page } = mountSolid(() => <ApprovalsPage />, { wrapper: provider.wrapper });
   const updateGateway = (next: Partial<ApplicationGatewaySnapshot>) => {
     currentGateway.publish({ ...currentGateway.gateway.snapshot, ...next });
+    flush();
   };
+  const query = <T extends HTMLElement = HTMLElement>(selector: string) =>
+    page.querySelector<T>(selector);
+  const text = (selector: string) => query(selector)?.textContent;
+  const waitText = (selector: string, value: string) =>
+    waitForSolid(() => expect(text(selector)).toContain(value));
   flush();
   return {
     page,
+    query,
+    text,
+    history: () => text(historyTable),
+    grants: () => text(grantsTable),
+    button: () => query<HTMLButtonElement>(`${grantsTable} button`),
+    waitHistory: (value: string) => waitText(historyTable, value),
+    waitGrants: (value: string) => waitText(grantsTable, value),
+    waitError: (value: string) => waitText('[role="alert"]', value),
     request,
     updateGateway,
     replaceGateway(this: void, kind: "source" | "client" | "account" | "recovery scope") {
@@ -101,8 +123,12 @@ function createPage(
       }
       flush();
     },
-    emitGatewayEvent(this: void, event: string, payload: unknown) {
-      initialGateway.publishEvent({ event, payload, type: "event" } as GatewayEventFrame);
+    resolveApproval(this: void, id = "refreshed") {
+      initialGateway.publishEvent({
+        event: "exec.approval.resolved",
+        payload: { id, decision: "deny" },
+        type: "event",
+      } as GatewayEventFrame);
     },
   };
 }
@@ -139,47 +165,30 @@ function standingGrant(name: string): ExecApprovalStandingGrant {
 describe("ApprovalsPage", () => {
   it("keeps history and grants through a blip without allowing offline actions", async () => {
     const refreshedHistory = createDeferred<ApprovalHistoryResult>();
-    const { page, updateGateway, request } = createPage(
-      replyOnce({ items: [terminal("retained", 2_000)], nextCursor: "next" }).mockReturnValue(
-        refreshedHistory.promise,
-      ),
+    const p = createPage(
+      replyOnce(historyReply("retained", 2_000, "next")).mockReturnValue(refreshedHistory.promise),
       operatorAuth(["operator.approvals"]),
       () => Promise.resolve(grantReply("Retained automation")),
     );
-    await waitForGrants(page, "Retained automation");
-
-    updateGateway({ phase: "reconnecting", hello: null });
-    flush();
-    expect(historyText(page)).toContain("echo retained");
-    expect(grantsText(page)).toContain("Retained automation");
-    expect(grantButton(page)?.disabled).toBe(true);
-    expect(page.querySelector(".data-table-pagination button")).toMatchObject({ disabled: true });
-
-    updateGateway({ phase: "connected", hello: operatorHello(["operator.approvals"]) });
-    flush();
-    expect(historyText(page)).toContain("echo retained");
-    refreshedHistory.resolve({ items: [terminal("fresh", 3_000)] });
-    await waitForHistory(page, "echo fresh");
-
-    updateGateway({
-      client: createTestGatewayClient(request),
-      phase: "reconnecting",
-    });
-    flush();
-    expect(page.textContent).not.toContain("echo fresh");
-    expect(page.textContent).not.toContain("Retained automation");
+    await p.waitGrants("Retained automation");
+    p.updateGateway({ phase: "reconnecting", hello: null });
+    expect(p.history()).toContain("echo retained");
+    expect(p.grants()).toContain("Retained automation");
+    expect(p.button()?.disabled).toBe(true);
+    expect(p.query(".data-table-pagination button")).toMatchObject({ disabled: true });
+    p.updateGateway({ phase: "connected", hello: operatorHello(["operator.approvals"]) });
+    expect(p.history()).toContain("echo retained");
+    refreshedHistory.resolve(historyReply("fresh", 3_000));
+    await p.waitHistory("echo fresh");
+    p.updateGateway({ client: createTestGatewayClient(p.request), phase: "reconnecting" });
+    expect(p.page.textContent).not.toContain("echo fresh");
+    expect(p.page.textContent).not.toContain("Retained automation");
   });
 
   it("does not claim an empty history when the load failed", async () => {
-    const request = vi.fn().mockRejectedValueOnce(new Error("boom"));
-    const { page } = createPage(request);
-
-    await waitForSolid(() =>
-      expect(page.querySelector('[role="alert"]')?.textContent).toContain("boom"),
-    );
-
-    const body = page.querySelector(".approval-history-table tbody")?.textContent ?? "";
-    expect(body).not.toContain("No resolved approvals");
+    const p = createPage(vi.fn().mockRejectedValueOnce(new Error("boom")));
+    await p.waitError("boom");
+    expect(p.text(`${historyTable} tbody`) ?? "").not.toContain("No resolved approvals");
   });
 
   it("retains accepted history through pending pagination, failure and retry", async () => {
@@ -187,96 +196,80 @@ describe("ApprovalsPage", () => {
     const moreRead = createDeferred<ApprovalHistoryResult>();
     const retryRead = createDeferred<ApprovalHistoryResult>();
     const request = replyOnce(firstRead.promise, moreRead.promise, retryRead.promise);
-    const { page } = createPage(request);
+    const p = createPage(request);
     await waitForSolid(() =>
-      expect(page.querySelector(".settings-loading-skeleton")?.getAttribute("aria-label")).toBe(
+      expect(p.query(".settings-loading-skeleton")?.getAttribute("aria-label")).toBe(
         "Loading approval history…",
       ),
     );
-
-    firstRead.resolve({ items: [terminal("retained", 2_000)], nextCursor: "next" });
-    await waitForHistory(page, "echo retained");
-    const table = page.querySelector(".approval-history-table")!;
+    firstRead.resolve(historyReply("retained", 2_000, "next"));
+    await p.waitHistory("echo retained");
+    const table = p.query(historyTable)!;
     const row = table.querySelector("tbody tr");
-    const more = page.querySelector<HTMLButtonElement>(".data-table-pagination button")!;
+    const more = p.query<HTMLButtonElement>(".data-table-pagination button")!;
+    const expectRow = (busy: string) => {
+      expect(table.getAttribute("aria-busy")).toBe(busy);
+      expect(table.querySelector("tbody tr")).toBe(row);
+    };
     more.click();
     more.click();
     flush();
     expect(request).toHaveBeenCalledTimes(2);
-    expect(table.getAttribute("aria-busy")).toBe("true");
-    expect(more.disabled).toBe(true);
-    expect(more.textContent).toContain("Loading");
-    expect(table.querySelector("tbody tr")).toBe(row);
-
+    expectRow("true");
+    expectButton(more, true, "Loading");
     moreRead.reject(new Error("History unavailable"));
     await waitForSolid(() => {
-      expect(page.querySelector('[role="alert"]')?.textContent).toContain("History unavailable");
-      expect(table.getAttribute("aria-busy")).toBe("false");
+      expect(p.text('[role="alert"]')).toContain("History unavailable");
+      expectRow("false");
       expect(more.disabled).toBe(false);
     });
-    expect(table.querySelector("tbody tr")).toBe(row);
-    page.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    p.query<HTMLButtonElement>('[role="alert"] button')!.click();
     flush();
     expect(request).toHaveBeenLastCalledWith("approval.history", { limit: 50 });
-    expect(table.getAttribute("aria-busy")).toBe("true");
-    expect(page.querySelector('[role="alert"]')).toBeNull();
-    expect(table.querySelector("tbody tr")).toBe(row);
-
-    retryRead.resolve({ items: [terminal("retained", 3_000)] });
-    await waitForSolid(() => expect(table.getAttribute("aria-busy")).toBe("false"));
-    expect(table.querySelector("tbody tr")).toBe(row);
-    expect(page.querySelector(".approval-history-table")).toBe(table);
+    expectRow("true");
+    expect(p.query('[role="alert"]')).toBeNull();
+    retryRead.resolve(historyReply("retained", 3_000));
+    await waitForSolid(() => expectRow("false"));
+    expect(p.query(historyTable)).toBe(table);
   });
 
   it("keeps a failed initial grants read unknown until an accepted refresh", async () => {
     const refreshedGrants = createDeferred<ExecApprovalGrantsListResult>();
-    const grants = vi.fn().mockRejectedValueOnce(new Error("Ledger unavailable"));
-    grants.mockReturnValue(refreshedGrants.promise);
-    const { page, emitGatewayEvent } = createPage(
-      () => Promise.resolve({ items: [] }),
-      undefined,
-      grants,
-    );
-    await waitForSolid(() =>
-      expect(page.querySelector('[role="alert"]')?.textContent).toContain("Ledger unavailable"),
-    );
-    const table = page.querySelector(".standing-grants-table");
-    expect(grantsText(page)).toContain("Unknown");
-    expect(grantsText(page)).not.toContain("No standing grants");
-    expect(page.querySelector('[role="alert"] button')).toBeNull();
-
-    emitGatewayEvent("exec.approval.resolved", { id: "refreshed", decision: "deny" });
+    const grants = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Ledger unavailable"))
+      .mockReturnValue(refreshedGrants.promise);
+    const p = createPage(undefined, undefined, grants);
+    await p.waitError("Ledger unavailable");
+    const table = p.query(grantsTable);
+    expect(p.grants()).toContain("Unknown");
+    expect(p.grants()).not.toContain("No standing grants");
+    expect(p.query('[role="alert"] button')).toBeNull();
+    p.resolveApproval();
     await waitForSolid(() => expect(grants).toHaveBeenCalledTimes(2));
-    expect(grantsText(page)).toContain("Unknown");
+    expect(p.grants()).toContain("Unknown");
     refreshedGrants.resolve({ grants: [] });
-    await waitForGrants(page, "No standing grants");
-    expect(page.querySelector('[role="alert"]')).toBeNull();
-    expect(page.querySelector(".standing-grants-table")).toBe(table);
+    await p.waitGrants("No standing grants");
+    expect(p.query('[role="alert"]')).toBeNull();
+    expect(p.query(grantsTable)).toBe(table);
   });
 
   it("refreshes the newest history after an approval resolves during pagination", async () => {
     const olderPage = createDeferred<ApprovalHistoryResult>();
-    const request = replyOnce(
-      { items: [terminal("first", 2_000)], nextCursor: "next" },
-      olderPage.promise,
-      { items: [terminal("newest", 3_000), terminal("first", 2_000)] },
-    );
-    const { page, emitGatewayEvent } = createPage(request);
-
-    await waitForHistory(page, "echo first");
-    const loadMore = [...page.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Load more"),
-    );
-    loadMore?.click();
+    const request = replyOnce(historyReply("first", 2_000, "next"), olderPage.promise, {
+      items: [terminal("newest", 3_000), terminal("first", 2_000)],
+    });
+    const p = createPage(request);
+    await p.waitHistory("echo first");
+    p.query<HTMLButtonElement>(".data-table-pagination button")!.click();
     flush();
     expect(request).toHaveBeenCalledTimes(2);
 
-    emitGatewayEvent("exec.approval.resolved", { id: "newest", decision: "deny" });
+    p.resolveApproval("newest");
     expect(request).toHaveBeenCalledTimes(2);
 
-    olderPage.resolve({ items: [terminal("older", 1_000)] });
-    await waitForHistory(page, "echo newest");
-
+    olderPage.resolve(historyReply("older", 1_000));
+    await p.waitHistory("echo newest");
     expect(request).toHaveBeenCalledTimes(3);
     expect(request).toHaveBeenLastCalledWith("approval.history", { limit: 50 });
   });
@@ -286,60 +279,52 @@ describe("ApprovalsPage", () => {
     { name: "legacy", scopes: undefined, allowed: true },
   ])("gates history for a $name operator", async ({ scopes, allowed }) => {
     const request = vi.fn().mockResolvedValue({ items: [] });
-    const { page } = createPage(request, operatorAuth(scopes));
-    await waitForSolid(() =>
-      expect(page.querySelector(".approval-history-table") !== null).toBe(allowed),
-    );
+    const p = createPage(request, operatorAuth(scopes));
+    await waitForSolid(() => expect(p.query(historyTable) !== null).toBe(allowed));
     expect(request.mock.calls).toEqual(allowed ? [["approval.history", { limit: 50 }]] : []);
     if (!allowed) {
-      expect(page.querySelector('[role="status"]')?.textContent).toContain("operator.approvals");
+      expect(p.text('[role="status"]')).toContain("operator.approvals");
     }
   });
 
   it("discards stale history when approval access changes on the same gateway", async () => {
     const staleHistory = createDeferred<ApprovalHistoryResult>();
-    const request = replyOnce(staleHistory.promise, { items: [terminal("current", 2_000)] });
-    const { page, emitGatewayEvent, updateGateway } = createPage(
-      request,
-      operatorAuth(["operator.approvals"]),
-    );
+    const request = replyOnce(staleHistory.promise, historyReply("current", 2_000));
+    const p = createPage(request, operatorAuth(["operator.approvals"]));
     expect(request).toHaveBeenCalledOnce();
 
-    updateGateway({ hello: operatorHello(["operator.read"]) });
-    flush();
-    emitGatewayEvent("exec.approval.resolved", { id: "inaccessible", decision: "deny" });
+    p.updateGateway({ hello: operatorHello(["operator.read"]) });
+    p.resolveApproval("inaccessible");
     flush();
     expect(request).toHaveBeenCalledOnce();
-    expect(page.querySelector(".approval-history-table")).toBeNull();
-
-    updateGateway({ hello: operatorHello(["operator.admin"]) });
-    await waitForHistory(page, "echo current");
+    expect(p.query(historyTable)).toBeNull();
+    p.updateGateway({ hello: operatorHello(["operator.admin"]) });
+    await p.waitHistory("echo current");
     expect(request).toHaveBeenCalledTimes(2);
 
-    staleHistory.resolve({ items: [terminal("stale", 1_000)] });
+    staleHistory.resolve(historyReply("stale", 1_000));
     await staleHistory.promise;
     flush();
-    expect(historyText(page)).toContain("echo current");
-    expect(historyText(page)).not.toContain("echo stale");
+    expect(p.history()).toContain("echo current");
+    expect(p.history()).not.toContain("echo stale");
   });
 
   it.each(["client", "source", "account", "recovery scope"] as const)(
     "clears standing grants while a replacement %s loads its ledger",
     async (replacement) => {
       const nextGrants = createDeferred<ExecApprovalGrantsListResult>();
-      const { page, updateGateway, replaceGateway } = createPage(
-        () => Promise.resolve({ items: [] }),
+      const p = createPage(
+        undefined,
         operatorAuth(undefined, "scope-first"),
         replyOnce(grantReply(oldAutomation)).mockReturnValue(nextGrants.promise),
       );
-      updateGateway({ selfUser: { id: "first" } });
-      await waitForGrants(page, oldAutomation);
-      replaceGateway(replacement);
-      expect(grantsText(page)).not.toContain(oldAutomation);
-      expect(grantButton(page)).toBeNull();
-
+      p.updateGateway({ selfUser: { id: "first" } });
+      await p.waitGrants(oldAutomation);
+      p.replaceGateway(replacement);
+      expect(p.grants()).not.toContain(oldAutomation);
+      expect(p.button()).toBeNull();
       nextGrants.resolve(grantReply(currentAutomation));
-      await waitForGrants(page, currentAutomation);
+      await p.waitGrants(currentAutomation);
     },
   );
 
@@ -352,25 +337,22 @@ describe("ApprovalsPage", () => {
       const oldRevoke = createDeferred<{ outcome: string }>();
       const currentRevoke = createDeferred<{ outcome: string }>();
       const revoke = replyOnce(oldRevoke.promise).mockReturnValue(currentRevoke.promise);
-      const { page, replaceGateway } = createPage(
-        (method) =>
-          method === "exec.approval.grants.revoke" ? revoke() : Promise.resolve({ items: [] }),
+      const p = createPage(
+        undefined,
         undefined,
         replyOnce(grantReply(oldAutomation)).mockResolvedValue(grantReply(currentAutomation)),
+        revoke,
       );
-      await waitForSolid(() => expect(grantButton(page)).not.toBeNull());
-      grantButton(page)!.click();
+      await waitForSolid(() => expect(p.button()).not.toBeNull());
+      p.button()!.click();
       flush();
-
-      replaceGateway(replacement);
-      await waitForGrants(page, currentAutomation);
-      const currentButton = grantButton(page)!;
+      p.replaceGateway(replacement);
+      await p.waitGrants(currentAutomation);
+      const currentButton = p.button()!;
       expect(currentButton.disabled).toBe(false);
       currentButton.click();
       flush();
-      expect(currentButton.disabled).toBe(true);
-      expect(currentButton.textContent).toContain("Revoking");
-
+      expectButton(currentButton, true, "Revoking");
       if (outcome === "resolve") {
         oldRevoke.resolve({ outcome: "revoked" });
       } else {
@@ -378,14 +360,12 @@ describe("ApprovalsPage", () => {
       }
       await Promise.allSettled([oldRevoke.promise]);
       flush();
-      expect(grantsText(page)).toContain("Until revoked");
-      expect(page.textContent).not.toContain("Old Gateway revoke failed");
-      expect(currentButton.disabled).toBe(true);
-      expect(currentButton.textContent).toContain("Revoking");
-
+      expect(p.grants()).toContain("Until revoked");
+      expect(p.page.textContent).not.toContain("Old Gateway revoke failed");
+      expectButton(currentButton, true, "Revoking");
       currentRevoke.resolve({ outcome: "revoked" });
-      await waitForGrants(page, "Revoked");
-      expect(grantButton(page)).toBeNull();
+      await p.waitGrants("Revoked");
+      expect(p.button()).toBeNull();
     },
   );
 
@@ -393,76 +373,60 @@ describe("ApprovalsPage", () => {
     const failedRevoke = createDeferred<unknown>();
     const retryRevoke = createDeferred<unknown>();
     const revoke = replyOnce(failedRevoke.promise, retryRevoke.promise);
-    const { page } = createPage(
-      (method) =>
-        method === "exec.approval.grants.revoke" ? revoke() : Promise.resolve({ items: [] }),
+    const p = createPage(
+      undefined,
       undefined,
       () => Promise.resolve(grantReply("Nightly backup")),
+      revoke,
     );
-    await waitForGrants(page, "Nightly backup");
-    const button = grantButton(page)!;
+    await p.waitGrants("Nightly backup");
+    const button = p.button()!;
     const row = button.closest("tr");
     button.click();
     button.click();
     flush();
     expect(revoke).toHaveBeenCalledOnce();
-    expect(button.disabled).toBe(true);
-    expect(button.textContent).toContain("Revoking");
-    expect(grantsText(page)).toContain("Until revoked");
-
+    expectButton(button, true, "Revoking");
+    expect(p.grants()).toContain("Until revoked");
     failedRevoke.reject(new Error("Revoke failed"));
     await waitForSolid(() => {
-      expect(page.querySelector('[role="alert"]')?.textContent).toContain("Revoke failed");
+      expect(p.text('[role="alert"]')).toContain("Revoke failed");
       expect(button.disabled).toBe(false);
       expect(button.textContent?.trim()).toBe("Revoke");
     });
-    expect(grantButton(page)?.closest("tr")).toBe(row);
-
+    expect(p.button()?.closest("tr")).toBe(row);
     button.click();
     flush();
     expect(button.disabled).toBe(true);
     retryRevoke.resolve({ outcome: "revoked" });
-    await waitForGrants(page, "Revoked");
+    await p.waitGrants("Revoked");
     expect(revoke).toHaveBeenCalledTimes(2);
-    expect(grantButton(page)).toBeNull();
+    expect(p.button()).toBeNull();
   });
 
   it("renders the standing-grant ledger and revokes through the gateway", async () => {
     const pendingRefresh = createDeferred<ExecApprovalGrantsListResult>();
     const grant = standingGrant("Nightly backup");
     const grants = replyOnce({ grants: [grant] }).mockReturnValue(pendingRefresh.promise);
-    const { page, emitGatewayEvent, request } = createPage(
-      (method, params) =>
-        method === "exec.approval.grants.revoke"
-          ? Promise.resolve({ outcome: "revoked", params })
-          : Promise.resolve({ items: [] }),
-      undefined,
-      grants,
+    const p = createPage(undefined, undefined, grants, () =>
+      Promise.resolve({ outcome: "revoked" }),
     );
-
-    await waitForGrants(page, "Nightly backup");
-
-    const ledger = page.querySelector(".standing-grants-table");
+    await p.waitGrants("Nightly backup");
+    const ledger = p.query(grantsTable);
     expect(ledger?.textContent).toContain("id -un");
     expect(ledger?.textContent).toContain("Until revoked");
-
-    emitGatewayEvent("exec.approval.resolved", { id: "another-approval", decision: "deny" });
+    p.resolveApproval("another-approval");
     await waitForSolid(() => expect(grants).toHaveBeenCalledTimes(2));
-
-    const revoke = [...page.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Revoke"),
-    );
+    const revoke = p.button();
     expect(revoke?.getAttribute("aria-label")).toBe("Revoke: Nightly backup — id -un");
     expect(ledger?.querySelector("th:last-child")?.textContent?.trim()).toBe("Revoke");
     revoke?.click();
-    await waitForGrants(page, "Revoked");
-
-    expect(request).toHaveBeenCalledWith("exec.approval.grants.revoke", { grantId: "grant-1" });
-
+    await p.waitGrants("Revoked");
+    expect(p.request).toHaveBeenCalledWith("exec.approval.grants.revoke", { grantId: "grant-1" });
     pendingRefresh.resolve({ grants: [grant] });
     await pendingRefresh.promise;
     flush();
-    expect(grantsText(page)).toContain("Revoked");
-    expect(grantButton(page)).toBeNull();
+    expect(p.grants()).toContain("Revoked");
+    expect(p.button()).toBeNull();
   });
 });
