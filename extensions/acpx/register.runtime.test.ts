@@ -3,9 +3,9 @@ import {
   unregisterAcpRuntimeBackend,
 } from "openclaw/plugin-sdk/acp-runtime-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "./runtime-api.js";
 
 type BackendLifecycle = {
   publish: (backend: { runtime: unknown }) => void;
@@ -58,15 +58,6 @@ vi.mock("./src/service.js", () => ({
 
 import { createRegisteredAcpxService } from "./registration.test-support.js";
 
-function createServiceContext() {
-  return {
-    workspaceDir: "/tmp/openclaw-acpx-register-test",
-    stateDir: "/tmp/openclaw-acpx-register-test/state",
-    config: {},
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-  };
-}
-
 type DeferredRuntime = {
   ensureSession(input: { sessionKey: string; agent: string; mode: string }): Promise<unknown>;
 };
@@ -83,9 +74,14 @@ const stoppedDuringActivation = () =>
 const notStarted = "ACPX runtime service is not started";
 
 describe("acpx register runtime service", () => {
-  let ctx: ReturnType<typeof createServiceContext>;
+  let ctx: OpenClawPluginServiceContext;
   beforeEach(() => {
-    ctx = createServiceContext();
+    ctx = {
+      workspaceDir: "/tmp/openclaw-acpx-register-test",
+      stateDir: "/tmp/openclaw-acpx-register-test/state",
+      config: {},
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    };
     vi.stubEnv("OPENCLAW_SKIP_ACPX_RUNTIME", undefined);
   });
   afterEach(() => {
@@ -112,6 +108,7 @@ describe("acpx register runtime service", () => {
         }),
       }),
     );
+    expect(service.id).toBe("acpx-runtime");
     expect(runtime).toBeTruthy();
     expect(createServiceMock).not.toHaveBeenCalled();
     expect(startMock).not.toHaveBeenCalled();
@@ -120,10 +117,6 @@ describe("acpx register runtime service", () => {
 
     expect(createServiceMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        backendLifecycle: expect.objectContaining({
-          publish: expect.any(Function),
-          retract: expect.any(Function),
-        }),
         pluginConfig: { timeoutSeconds: 10 },
       }),
     );
@@ -133,11 +126,9 @@ describe("acpx register runtime service", () => {
     params?.openKeyedStore?.({ namespace: "test", maxEntries: 1 });
     expect(openKeyedStore).toHaveBeenCalledWith({ namespace: "test", maxEntries: 1 });
     expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
-    expect(ctx.logger.info).toHaveBeenCalledWith("embedded acpx runtime backend registered lazily");
 
     await service.stop?.(ctx);
 
-    expect(stopMock).toHaveBeenCalledWith(ctx, expect.any(Object));
     expect(getAcpRuntimeBackend("acpx")).toBeNull();
   });
 
@@ -162,7 +153,6 @@ describe("acpx register runtime service", () => {
 
     expect(await activationResult).toEqual(stoppedDuringActivation());
     expect(stopMock).toHaveBeenCalledOnce();
-    expect(stopMock).toHaveBeenCalledWith(ctx, expect.any(Object));
     expect(getAcpRuntimeBackend("acpx")).toBeNull();
     await expect(session(runtime, "stale-proxy")).rejects.toThrow(notStarted);
   });

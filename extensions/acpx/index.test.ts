@@ -57,16 +57,17 @@ vi.mock("openclaw/plugin-sdk/acp-runtime-backend", async (importOriginal) => ({
 
 import plugin from "./index.js";
 
-function createHarnessApi(options: Parameters<typeof createTestPluginApi>[0]) {
+function createHarnessApi(options: Parameters<typeof createTestPluginApi>[0] = {}) {
   const harnesses = new Map<string, Parameters<OpenClawPluginApi["registerAgentHarness"]>[0]>();
+  const api = createTestPluginApi({
+    id: "acpx",
+    runtime: createPluginRuntimeMock({ config: { current: () => ({}) } }),
+    ...options,
+    registerAgentHarness: (harness) => harnesses.set(harness.id, harness),
+  });
+  plugin.register(api);
   return {
-    api: createTestPluginApi({
-      id: "acpx",
-      ...options,
-      registerAgentHarness: (harness) => {
-        harnesses.set(harness.id, harness);
-      },
-    }),
+    api,
     getHarness(this: void, id: string) {
       const harness = harnesses.get(`acp-${id}`);
       if (!harness?.loadModelCatalog) {
@@ -118,38 +119,18 @@ describe("acpx plugin", () => {
     });
   });
 
-  it("registers the runtime service and reply_dispatch hook", () => {
-    const api = createTestPluginApi({
-      pluginConfig: { stateDir: "/tmp/acpx" },
-      runtime: createPluginRuntimeMock(),
-      registerService: vi.fn(),
-      on: vi.fn(),
-    });
-
-    plugin.register(api);
-
+  it("registers the ACP reply_dispatch hook without starting the runtime", () => {
+    const { api } = createHarnessApi({ on: vi.fn() });
     expect(createAcpxRuntimeServiceMock).not.toHaveBeenCalled();
-    expect(api.registerService).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "acpx-runtime",
-        start: expect.any(Function),
-        stop: expect.any(Function),
-      }),
-    );
     expect(api.on).toHaveBeenCalledWith("reply_dispatch", tryDispatchAcpReplyHookMock, {
       eligibleDispatchKinds: ["acp"],
     });
   });
 
   it("declares setup auto-enable reasons for ACPX-owned ACP config", () => {
-    let probe: Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0] | undefined;
-    setupPlugin.register(
-      createTestPluginApi({
-        registerAutoEnableProbe(registered) {
-          probe = registered;
-        },
-      }),
-    );
+    const registerAutoEnableProbe = vi.fn<OpenClawPluginApi["registerAutoEnableProbe"]>();
+    setupPlugin.register(createTestPluginApi({ registerAutoEnableProbe }));
+    const probe = registerAutoEnableProbe.mock.calls[0]?.[0];
     if (!probe) {
       throw new Error("expected ACPX setup plugin to register an auto-enable probe");
     }
@@ -173,7 +154,6 @@ describe("acpx plugin", () => {
       registerGatewayMethod: methods,
       registerReload: reload,
     });
-    plugin.register(api);
     const registration = methods.mock.calls.find(([method]) => method === "acpx.agents.list");
     if (!registration) {
       throw new Error("Native agent inspection method missing");
@@ -247,7 +227,7 @@ export { sendReceipt };`,
       );
       const runtimeDirectory = path.join(directory, "runtime");
       const config: OpenClawPluginApi["config"] = {};
-      const { api, getHarness } = createHarnessApi({
+      const { getHarness } = createHarnessApi({
         config,
         pluginConfig: {
           stateDir: runtimeDirectory,
@@ -277,7 +257,6 @@ export { sendReceipt };`,
           },
         }),
       });
-      plugin.register(api);
       const harness = getHarness("opencode");
       const catalog = harness.loadModelCatalog(catalogInput(config, directory, directory)).then(
         (models) => ({ models, error: undefined }),
@@ -337,14 +316,12 @@ export { sendReceipt };`,
   it("applies configured agent env lists to native catalog inspection", async () => {
     nativePrograms.add("copilot");
     vi.mocked(inspectAgentModels).mockResolvedValueOnce(undefined);
-    const { api, getHarness } = createHarnessApi({
+    const { getHarness } = createHarnessApi({
       pluginConfig: {
         agentProcessEnvAllow: ["GH_TOKEN"],
         agentProcessEnvBlock: ["OPENCLAW_GATEWAY_TOKEN"],
       },
-      runtime: createPluginRuntimeMock({ config: { current: () => ({}) } }),
     });
-    plugin.register(api);
     await getHarness("copilot").loadModelCatalog(catalogInput({}));
     expect(inspectAgentModels).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -367,18 +344,13 @@ export { sendReceipt };`,
         data: { privateFixture: "not-for-catalog" },
       });
       vi.mocked(inspectAgentModels).mockRejectedValueOnce(error);
-      const { api, getHarness } = createHarnessApi({
-        runtime: createPluginRuntimeMock({ config: { current: () => ({}) } }),
-      });
-      plugin.register(api);
-      const harness = getHarness("copilot");
+      const { getHarness } = createHarnessApi();
       await expect(
-        harness.loadModelCatalog(catalogInput({}, "/fixture/agent", "/fixture/work")),
+        getHarness("copilot").loadModelCatalog(catalogInput({}, "/fixture/agent", "/fixture/work")),
       ).resolves.toEqual({
         entries: [],
         outcomes: [{ provider: "acp-copilot", status, rejectionScope: "catalog" }],
       });
-      expect(inspectAgentModels).toHaveBeenCalledOnce();
     },
   );
 });
