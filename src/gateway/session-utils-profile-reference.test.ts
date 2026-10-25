@@ -142,8 +142,8 @@ it("matches retained profile prefixes across case and hyphen placement, with exa
       ]);
       for (const fields of [{ createdActor: creator(id) }, participant(id)]) {
         const entries: [string, SessionEntry][] = [
-          ["retained", { sessionId: "retained", ...fields }],
-          ["unrelated", { sessionId: "unrelated", ...participant(unrelated) }],
+          ["retained", { sessionId: "retained", updatedAt: 1, ...fields }],
+          ["unrelated", { sessionId: "unrelated", updatedAt: 1, ...participant(unrelated) }],
         ];
         expect(
           resolveSessionListProfileReference(reference, entries, identities, new Set()),
@@ -151,7 +151,7 @@ it("matches retained profile prefixes across case and hyphen placement, with exa
           ok: true,
           value: id,
         });
-        entries.push(["exact", { sessionId: "exact", ...participant(reference) }]);
+        entries.push(["exact", { sessionId: "exact", updatedAt: 1, ...participant(reference) }]);
         expect(
           resolveSessionListProfileReference(reference, entries, identities, new Set()),
         ).toEqual({

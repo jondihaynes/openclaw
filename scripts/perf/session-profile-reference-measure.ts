@@ -255,6 +255,8 @@ try {
     }
   }
   const page = { offset: 0, limit: 25, ownerLimit: 25 };
+  const projectOwner = context.identityProjection?.owner ?? identity.projectSessionOwner;
+  const projectPeople = context.identityProjection?.people ?? identity.projectSessionPeople;
   const referenceScopes = requests.map(({ params }) => {
     const entries = Array.from(params.entries("all")).filter(
       ([key]) => params.entryFilter?.(key) ?? true,
@@ -262,13 +264,8 @@ try {
     const allowed = params.restrictProfileReferences ? new Set<string>() : undefined;
     if (allowed) {
       for (const [, entry] of entries) {
-        const actor = context.identityProjection.owner(
-          entry,
-          identities,
-          cfg,
-          configuredAgentIds,
-        )?.actor;
-        for (const person of context.identityProjection.people(entry, identities, actor)) {
+        const actor = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
+        for (const person of projectPeople(entry, identities, actor)) {
           allowed.add(person.identity.id);
         }
       }
@@ -287,7 +284,9 @@ try {
             scope.allowed,
           )
         : undefined;
-      assert.ok(resolved === undefined || resolved.ok);
+      if (resolved && !resolved.ok) {
+        throw new Error("Unexpected ambiguous benchmark reference");
+      }
       return { entries: [], totalCount: 0, involvingProfileId: resolved?.value };
     }
     return values.selection
