@@ -27,6 +27,10 @@ targets. A single smoke pair verifies setup and assertions, not latency stabilit
 All results retain task, script, layout and style time, long tasks, RPC counts,
 DOM counts, and JavaScript heap endpoints. Heap values are **unforced** samples:
 GC timing affects the delta, so these are not retained-heap or leak measurements.
+Raw `TaskDuration` includes DevTools command work. Report it separately from
+`TaskDuration - DevToolsCommandDuration`; the subtraction is derived attribution,
+not independently measured latency or INP. Scroll cases use programmatic jumps
+or wheel events, not sustained trackpad scrolling.
 `--trace` is a separate attribution run; profiler overhead is not mixed with
 untraced timing. First-render cases measure the first route/reveal action after
 the shell is ready, not full document startup.
@@ -121,21 +125,21 @@ from iframe process startup. The gallery has 1,000 saved dashboards with one pre
 widget each. Workspace browsing has 20 folders with 250 files per folder (the real
 per-folder cap); warm tree cases open all folders before measuring the action.
 
-| Scenario                       | Measured action and visible assertion                                         |
-| ------------------------------ | ----------------------------------------------------------------------------- |
-| `data-board-first-render`      | Open Dashboard; assert 250 visible report widgets.                            |
-| `data-board-tab-switch`        | Switch to another tab; assert its 250 reports and retain the visited tab.     |
-| `data-board-live-update`       | Deliver a receipt updating one report; assert its new value and widget count. |
-| `data-board-scroll`            | Scroll the board; assert its mounted reports remain.                          |
-| `data-dashboards-first-render` | Open Dashboards from Pages; assert 1,000 cards.                               |
-| `data-dashboards-search`       | Search by final title; assert one card.                                       |
-| `data-dashboards-sort`         | Sort by title; assert all 1,000 cards and their new leading title.            |
-| `data-dashboards-scroll`       | Scroll to the last gallery row; record nearby preview reads.                  |
-| `data-workspace-first-render`  | Open Files; assert the 20-folder root listing.                                |
-| `data-workspace-expand`        | Open the last folder after the other 19; assert all 5,000 children.           |
-| `data-workspace-search`        | Search the loaded tree; assert 20 authoritative matches.                      |
-| `data-workspace-filter`        | Select Changed; assert modified files and their folders.                      |
-| `data-workspace-scroll`        | Scroll within the expanded 5,000-file Files panel.                            |
+| Scenario                       | Measured action and visible assertion                                                   |
+| ------------------------------ | --------------------------------------------------------------------------------------- |
+| `data-board-first-render`      | Open Dashboard; assert 250 visible report widgets.                                      |
+| `data-board-tab-switch`        | Switch to another tab; assert its 250 reports and retain the visited tab.               |
+| `data-board-live-update`       | Deliver a receipt updating one report; assert its new value and widget count.           |
+| `data-board-scroll`            | Scroll the board; assert its mounted reports remain.                                    |
+| `data-dashboards-first-render` | Open Dashboards from Pages; assert 1,000 cards.                                         |
+| `data-dashboards-search`       | Search by final title; assert one card.                                                 |
+| `data-dashboards-sort`         | Sort by title; assert all 1,000 cards and their new leading title.                      |
+| `data-dashboards-scroll`       | Scroll to the last gallery row; record nearby preview reads.                            |
+| `data-workspace-first-render`  | Open Files; assert the 20-folder root listing.                                          |
+| `data-workspace-expand`        | Open the last folder after the other 19; await its final child and record mounted rows. |
+| `data-workspace-search`        | Search the loaded tree; assert 20 authoritative matches.                                |
+| `data-workspace-filter`        | Select Changed; assert modified files and their folders.                                |
+| `data-workspace-scroll`        | Scroll within the expanded 5,000-file Files panel.                                      |
 
 ## Boundaries and exclusions
 

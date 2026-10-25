@@ -1,7 +1,6 @@
 import { createErrorBoundary } from "@solidjs/signals";
-import { createSignal, lazy, Loading, onSettled, Show } from "solid-js";
+import { lazy, Loading } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { NearViewportObserver } from "../../components/near-viewport-observer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
@@ -13,48 +12,24 @@ export function DashboardPreview(props: {
   gatewaySnapshot?: ApplicationGatewaySnapshot;
   sessionKey?: string;
   agentId?: string;
-  viewportTarget: () => HTMLElement;
 }) {
-  const [nearVisible, setNearVisible] = createSignal(false);
-  onSettled(() => {
-    let active = true;
-    const visibility = new NearViewportObserver(200, () => {
-      if (active) {
-        setNearVisible(visibility.nearVisible);
-      }
-    });
-    // Probe the card outside skipped content; pre-paint bounds would activate every preview.
-    const frame = window.requestAnimationFrame(() => visibility.observe(props.viewportTarget()));
-    return () => {
-      active = false;
-      window.cancelAnimationFrame(frame);
-      visibility.disconnect();
-    };
-  });
-  return (
-    <openclaw-dashboard-preview>
-      <Show when={nearVisible()}>
-        <>
-          {createErrorBoundary(
-            () => (
-              <Loading>
-                <BoardDocument
-                  passive={true}
-                  gatewaySnapshot={props.gatewaySnapshot}
-                  preparedSession={{ sessionKey: props.sessionKey ?? "", agentId: props.agentId }}
-                />
-              </Loading>
-            ),
-            (error) => (
-              <div class="dashboard-preview__error">
-                {t("dashboardDocument.loadFailed", { error: formatUiError(error()) })}
-              </div>
-            ),
-          )}
-        </>
-      </Show>
-    </openclaw-dashboard-preview>
+  const content = createErrorBoundary(
+    () => (
+      <Loading>
+        <BoardDocument
+          passive={true}
+          gatewaySnapshot={props.gatewaySnapshot}
+          preparedSession={{ sessionKey: props.sessionKey ?? "", agentId: props.agentId }}
+        />
+      </Loading>
+    ),
+    (error) => (
+      <div class="dashboard-preview__error">
+        {t("dashboardDocument.loadFailed", { error: formatUiError(error()) })}
+      </div>
+    ),
   );
+  return <openclaw-dashboard-preview>{content()}</openclaw-dashboard-preview>;
 }
 
 declare module "@solidjs/web" {

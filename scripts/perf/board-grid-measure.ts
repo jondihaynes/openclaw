@@ -1,5 +1,6 @@
 import { deepStrictEqual } from "node:assert";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
@@ -110,6 +111,10 @@ console.log(
   JSON.stringify(
     {
       base: values.base,
+      head: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      sourceSha256: createHash("sha256")
+        .update(readFileSync(new URL(sourcePath, root)))
+        .digest("hex"),
       pairs,
       iterations,
       node: process.version,

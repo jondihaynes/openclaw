@@ -366,7 +366,7 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     id: "data-dashboards-scroll",
     dataPage: "dashboards",
     route: "/dashboards",
-    expected: "Scrolling to the final gallery row loads only nearby previews.",
+    expected: "Scrolling reveals the final gallery row and records its preview reads.",
     fixtureOverrides: createGalleryFixture,
     prepare: prepareGallery,
     run: async (page, gateway) => {
@@ -378,6 +378,92 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
       });
       await settle(page);
       return { previewReads: (await gateway.getRequests("board.get")).length };
+    },
+  },
+  {
+    id: "data-dashboards-responsive-navigation",
+    dataPage: "dashboards",
+    route: "/dashboards",
+    expected:
+      "All 1,000 titles and links remain native, the final card reveals its content on focus, and 3/2/1-column layouts fit the viewport.",
+    fixtureOverrides: createGalleryFixture,
+    prepare: prepareGallery,
+    // Multi-viewport correctness/capture proof; do not include in timing comparisons.
+    run: async (page) => {
+      const finalCard = page.locator('[data-dashboard-session="agent:main:data-gallery-999"]');
+      const finalLink = finalCard.locator("a.dashboard-card__main");
+      const previousLink = page.locator(
+        '[data-dashboard-session="agent:main:data-gallery-998"] a.dashboard-card__main',
+      );
+      const originalLink = await finalLink.elementHandle();
+      if (!originalLink) {
+        throw new Error("Final dashboard link is missing before scrolling");
+      }
+      const viewport = page.viewportSize()!;
+      try {
+        for (const [width, columns] of [
+          [1280, 3],
+          [900, 2],
+          [520, 1],
+        ] as const) {
+          await page.setViewportSize({ width, height: viewport.height });
+          await finalCard.scrollIntoViewIfNeeded();
+          await finalLink.focus();
+          await finalCard
+            .locator(".dashboard-card__author")
+            .filter({ hasText: "By Author 9" })
+            .waitFor();
+          await finalCard
+            .locator("openclaw-dashboard-preview openclaw-report-widget svg")
+            .waitFor();
+          await settle(page);
+          if (
+            !(await finalLink.evaluate(
+              (link, original) => link === original && document.activeElement === original,
+              originalLink,
+            ))
+          ) {
+            throw new Error(`Final dashboard link lost identity or native focus at ${width}px`);
+          }
+          await page.keyboard.press("Shift+Tab");
+          if (!(await previousLink.evaluate((link) => document.activeElement === link))) {
+            throw new Error(`Shift+Tab did not reach the neighboring dashboard at ${width}px`);
+          }
+          await page.keyboard.press("Tab");
+          if (!(await finalLink.evaluate((link) => document.activeElement === link))) {
+            throw new Error(`Tab did not return to the final dashboard at ${width}px`);
+          }
+          await page
+            .locator(`${galleryHost} .dashboards-grid`)
+            .evaluate((grid, expectedColumns) => {
+              const columns = getComputedStyle(grid).gridTemplateColumns.split(" ").length;
+              const bounds = grid.getBoundingClientRect();
+              if (
+                columns !== expectedColumns ||
+                bounds.left < -1 ||
+                bounds.right > innerWidth + 1 ||
+                grid.scrollWidth > grid.clientWidth + 1 ||
+                document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+              ) {
+                throw new Error(
+                  `Gallery layout overflows or has ${columns} columns, expected ${expectedColumns}`,
+                );
+              }
+            }, columns);
+          const counts = await page.locator(galleryHost).evaluate((host) => ({
+            cards: host.querySelectorAll("[data-dashboard-session]").length,
+            links: host.querySelectorAll("[data-dashboard-session] a.dashboard-card__main").length,
+            titles: host.querySelectorAll("[data-dashboard-session] h2").length,
+          }));
+          if (Object.values(counts).some((count) => count !== galleryCount)) {
+            throw new Error(`Gallery lost native cards, titles or links at ${width}px`);
+          }
+        }
+        return { cards: galleryCount, responsiveLayouts: 3, retainedFinalLink: true };
+      } finally {
+        await page.setViewportSize(viewport);
+        await originalLink.dispose();
+      }
     },
   },
   {

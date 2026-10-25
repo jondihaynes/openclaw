@@ -180,7 +180,7 @@ export const dataUsageScenarios: readonly InteractionScenario[] = [
     ...fixture,
     id: "data-usage-date-range",
     route: pathForRoute("usage"),
-    expected: "Expanding the date range renders 180 daily chart buckets for 12,000 sessions.",
+    expected: "Expanding the date range includes all 12,000 sessions across 180 days.",
     prepare: ready,
     run: async (page, gateway) => {
       const after = (await gateway.getRequests("sessions.usage")).length;
