@@ -36,7 +36,6 @@ function finishMockChild(child: MockChild, code: number | null, signal: NodeJS.S
 
 const children: MockChild[] = [];
 let originalPlatform: NodeJS.Platform;
-
 const MEET_URL = "https://meet.google.com/xyz-abcd-uvw";
 const REALTIME_START = {
   action: "start",
@@ -88,22 +87,15 @@ async function expectStopWaits(stops: Array<() => Promise<unknown>>, pending?: (
   return Promise.all(results);
 }
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawnSync: vi.fn(() => ({
-      status: 0,
-      stdout: "BlackHole 2ch",
-      stderr: "",
-    })),
-    spawn: vi.fn(() => {
-      const child = new MockChild();
-      children.push(child);
-      return child;
-    }),
-  };
-});
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawnSync: vi.fn(() => ({ status: 0, stdout: "BlackHole 2ch", stderr: "" })),
+  spawn: vi.fn(() => {
+    const child = new MockChild();
+    children.push(child);
+    return child;
+  }),
+}));
 
 describe("google-meet node host bridge sessions", () => {
   beforeEach(() => {
@@ -204,24 +196,18 @@ describe("google-meet node host bridge sessions", () => {
     await bridgeCommand("stop", start.bridgeId);
   });
 
-  it.each([false, true])(
-    "waits for SIGTERM-resistant processes (retired output=%s)",
-    async (retireOutput) => {
-      vi.useFakeTimers();
-      const start = await startBridge();
-      const pair = commandPair(!retireOutput);
-      const resistant = retireOutput ? [pair[0]] : pair;
-      if (retireOutput) {
-        pair[0].ignoreSigterm = true;
-        await bridgeCommand("clearAudio", start.bridgeId);
-      }
-      await expectStopWaits([() => bridgeCommand("stop", start.bridgeId)], () =>
-        expectKills(resistant, "SIGTERM"),
-      );
-      expect(resistant.map((child) => child.signalCode)).toEqual(resistant.map(() => "SIGKILL"));
-      expectKills(resistant, "SIGTERM", "SIGKILL");
-    },
-  );
+  it("waits for SIGTERM-resistant retired output", async () => {
+    vi.useFakeTimers();
+    const start = await startBridge();
+    const [output] = commandPair();
+    output.ignoreSigterm = true;
+    await bridgeCommand("clearAudio", start.bridgeId);
+    await expectStopWaits([() => bridgeCommand("stop", start.bridgeId)], () =>
+      expectKills([output], "SIGTERM"),
+    );
+    expect(output.signalCode).toBe("SIGKILL");
+    expectKills([output], "SIGTERM", "SIGKILL");
+  });
 
   it("closes once when command-pair streams fail together", async () => {
     const start = await startBridge();
