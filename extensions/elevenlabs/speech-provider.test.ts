@@ -13,6 +13,7 @@ vi.mock("./config-api.js", () => ({
   resolveElevenLabsApiKeyWithProfileFallback: () => null,
 }));
 
+// mock-isolation: Synthesis uses fixture-owned transport and never performs external requests.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchMock,
   ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,

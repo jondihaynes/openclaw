@@ -52,7 +52,7 @@ function mount(request: GatewayBrowserClient["request"], signedIn = true, multip
   const { container: element } = mountSolid(() => <PersonalInstructions />, {
     wrapper: provider.wrapper,
   });
-  return { selection, emit: harness.emitSnapshot, element };
+  return { selection, emit: harness.emitSnapshot.bind(harness), element };
 }
 type PersonalFile = Omit<typeof file, "hash"> & { hash: string | null };
 function replies(...results: (Partial<PersonalFile> | Promise<PersonalFile> | Error)[]) {

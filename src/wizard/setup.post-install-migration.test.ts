@@ -17,6 +17,7 @@ vi.mock("../plugins/migration-provider-runtime.js", () => ({
 const resolveOwnership = vi.hoisted(() =>
   vi.fn((_params: { value?: string }) => ({ pluginIds: ["codex"], bundledCompatPluginIds: [] })),
 );
+// mock-isolation: Only fixture migration owners participate; do not discover installed plugins.
 vi.mock("../plugins/manifest-contract-runtime.js", () => ({
   resolveManifestContractRuntimePluginResolution: resolveOwnership,
 }));

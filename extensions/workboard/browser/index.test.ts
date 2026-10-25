@@ -40,8 +40,8 @@ async function activate() {
   await tick();
 }
 const tick = () => vi.advanceTimersByTimeAsync(0);
-const query = <T extends Element = HTMLElement>(selector: string, root: ParentNode = document) =>
-  expectDefined(root.querySelector<T>(selector), selector);
+const query = (selector: string) =>
+  expectDefined(document.querySelector<HTMLElement>(selector), selector);
 const navigation = (id: string) =>
   fixture.registrations.get(`navigation/board-${id}`) as ControlUiNavigationItem;
 const deleteAction = () =>
@@ -54,7 +54,12 @@ const registeredKeys = (prefix: string) =>
 const deleteCalls = () =>
   request.mock.calls.filter(([method]) => method === "workboard.boards.delete");
 const dialogButton = (confirm: boolean) =>
-  query<HTMLButtonElement>(`[data-test-dialog] ${confirm ? ".danger" : "button:not(.danger)"}`);
+  expectDefined(
+    document.querySelector<HTMLButtonElement>(
+      `[data-test-dialog] ${confirm ? ".danger" : "button:not(.danger)"}`,
+    ),
+    "dialog button",
+  );
 const clickDialog = (confirm: boolean) => dialogButton(confirm).click();
 const expectError = (message: string) =>
   expect(query("[role=alert]").textContent).toContain(message);
@@ -326,8 +331,14 @@ it("disambiguates a created board and its sibling before pinning through a stale
   await vi.advanceTimersByTimeAsync(0);
   read.mockReturnValue(stale.promise);
   fixture.emit("plugin.workboard.changed", {});
-  const form = query<HTMLFormElement>(".workboard-board-draft", container);
-  const name = query<HTMLInputElement>(".workboard-board-draft__name input", form);
+  const form = expectDefined(
+    container.querySelector<HTMLFormElement>(".workboard-board-draft"),
+    "draft form",
+  );
+  const name = expectDefined(
+    form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
+    "draft name",
+  );
   name.value = board.name;
   name.dispatchEvent(new Event("input", { bubbles: true }));
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));

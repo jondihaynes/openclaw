@@ -88,6 +88,7 @@ describe("qa aimock server", () => {
     const request = (text: string, output: string) =>
       client.responses.create({
         model: "openai/gpt-5.6-luna",
+        stream: false,
         input: [
           makeResponsesInput(text),
           call,

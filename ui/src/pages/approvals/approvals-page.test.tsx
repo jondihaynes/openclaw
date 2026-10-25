@@ -87,8 +87,7 @@ function createPage({
     source.publish({ ...source.gateway.snapshot, ...next });
     flush();
   };
-  const query = <T extends HTMLElement = HTMLElement>(selector: string) =>
-    page.querySelector<T>(selector);
+  const query = (selector: string) => page.querySelector<HTMLElement>(selector);
   const text = (selector: string) => query(selector)?.textContent;
   const waitText = (selector: string, value: string) =>
     waitForSolid(() => expect(text(selector)).toContain(value));
@@ -97,7 +96,7 @@ function createPage({
     page,
     query,
     text,
-    button: () => query<HTMLButtonElement>(`${grantsTable} button`),
+    button: (selector = `${grantsTable} button`) => page.querySelector<HTMLButtonElement>(selector),
     waitText,
     request,
     updateGateway,
@@ -186,11 +185,15 @@ it.each(["failure", "resolved event"])("retains history during %s", async (outco
   firstRead.resolve(historyReply("retained", 2_000, "next"));
   await p.waitText(historyTable, "echo retained");
   const table = p.query(historyTable)!;
-  const row = table.querySelector("tbody tr");
-  const more = p.query<HTMLButtonElement>(".data-table-pagination button")!;
+  const retainedRow = () =>
+    [...table.querySelectorAll("tbody tr")].find((row) =>
+      row.textContent?.includes("echo retained"),
+    );
+  const row = retainedRow();
+  const more = p.button(".data-table-pagination button")!;
   const expectRow = (busy: string) => {
     expect(table.getAttribute("aria-busy")).toBe(busy);
-    expect(table.querySelector("tbody tr")).toBe(row);
+    expect(retainedRow()).toBe(row);
   };
   more.click();
   more.click();
@@ -205,7 +208,7 @@ it.each(["failure", "resolved event"])("retains history during %s", async (outco
       expectRow("false");
       expect(more.disabled).toBe(false);
     });
-    p.query<HTMLButtonElement>('[role="alert"] button')!.click();
+    p.button('[role="alert"] button')!.click();
   } else {
     p.resolveApproval("newest");
     expect(request).toHaveBeenCalledTimes(2);
@@ -217,6 +220,7 @@ it.each(["failure", "resolved event"])("retains history during %s", async (outco
   retryRead.resolve({ items: [terminal("newest", 3_000), terminal("retained", 2_000)] });
   await p.waitText(historyTable, "echo newest");
   await waitForSolid(() => expectRow("false"));
+  expect(table.querySelector("tbody tr")?.textContent).toContain("echo newest");
   expect(p.query(historyTable)).toBe(table);
 });
 

@@ -83,9 +83,9 @@ function setup(handler: (method: string, params?: unknown) => unknown = async ()
   return { fixture, request, moves, mount, mountAll, lease, connect };
 }
 type Widget = ReturnType<ReturnType<typeof setup>["mount"]>;
-const query = <T extends HTMLElement = HTMLElement>(widget: Widget, selector: string) =>
-  widget.container.querySelector<T>(selector);
-const select = (widget: Widget) => query<HTMLSelectElement>(widget, "select");
+const query = (widget: Widget, selector: string) =>
+  widget.container.querySelector<HTMLElement>(selector);
+const select = (widget: Widget) => widget.container.querySelector<HTMLSelectElement>("select");
 const text = (widget: Widget) => widget.container.textContent;
 const texts = (widget: Widget, selector: string) =>
   [...widget.container.querySelectorAll(selector)].map((el) => el.textContent);
@@ -94,7 +94,9 @@ function setupMove(move: () => unknown, list: () => unknown = snapshot) {
 }
 const expectLoaded = (widget: Widget) => settle(() => expect(select(widget)).not.toBeNull());
 const expectStatus = (widget: Widget, value: string, selector = "select") =>
-  settle(() => expect(query<HTMLSelectElement>(widget, selector)?.value).toBe(value));
+  settle(() =>
+    expect(widget.container.querySelector<HTMLSelectElement>(selector)?.value).toBe(value),
+  );
 function expectText(widgets: readonly Widget[], content: string, present = true) {
   for (const widget of widgets) {
     const assertion = expect(text(widget));
@@ -203,7 +205,7 @@ it.each([
   const reconciled = createDeferred<unknown>();
   const move = createDeferred<unknown>();
   const moved = movedCard();
-  const persistedCards = [moved, ...cards.slice(1)];
+  const persistedCards = success ? [...cards.slice(1), moved] : [moved, ...cards.slice(1)];
   const list = vi
     .fn()
     .mockResolvedValue(snapshot(persistedCards))

@@ -25,8 +25,11 @@ const { verifySetupInference, runSystemAgent, runGuidedOnboarding } = vi.hoisted
   runSystemAgent: vi.fn(),
   runGuidedOnboarding: vi.fn(),
 }));
+// mock-isolation: Route verification through the controlled probe fixture, not operator config.
 vi.mock("./setup-inference.js", () => ({ verifySetupInference }));
+// mock-isolation: Observe execution admission without starting a real system-agent session.
 vi.mock("./system-agent.js", () => ({ runSystemAgent }));
+// mock-isolation: Error reporting must not launch interactive onboarding.
 vi.mock("../commands/onboard-guided.js", () => ({ runGuidedOnboarding }));
 
 const runtimeLoader = vi.hoisted(() => vi.fn());

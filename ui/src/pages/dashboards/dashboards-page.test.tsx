@@ -117,8 +117,8 @@ function connect(readList: (params: Parameters<GatewayRequestHandler>[1]) => unk
   return source;
 }
 
-beforeEach(() => {
-  i18n.setLocale("en");
+beforeEach(async () => {
+  await i18n.setLocale("en");
   // Gallery E2E owns Board preview rendering; these tests stop before viewport admission.
   vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
   const { requestAnimationFrame, cancelAnimationFrame } = globalThis;

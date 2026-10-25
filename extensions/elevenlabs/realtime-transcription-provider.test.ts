@@ -52,9 +52,9 @@ async function createSession(
   const session = provider.createSession({
     ...sessionOptions,
     providerConfig: {
-      apiKey: "fixture-value",
-      baseUrl: `http://127.0.0.1:${port}`,
       ...sessionOptions.providerConfig,
+      apiKey: sessionOptions.providerConfig?.apiKey ?? "fixture-value",
+      baseUrl: sessionOptions.providerConfig?.baseUrl ?? `http://127.0.0.1:${port}`,
     },
   });
   cleanup = async () => {

@@ -34,7 +34,7 @@ const owners: ReturnType<typeof createSessionMaintenanceOwner>[] = [];
 const reservations: (() => void)[] = [];
 let closing = false;
 function gate(name: string) {
-  const deferred = gates.get(name) ?? createDeferred<void>();
+  const deferred = gates.get(name) ?? createDeferred();
   gates.set(name, deferred);
   if (closing) {
     deferred.resolve();
