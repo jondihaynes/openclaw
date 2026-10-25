@@ -40,12 +40,12 @@ export type LogsProps = {
   onScroll: JSX.EventHandler<HTMLDivElement, Event>;
 };
 
-function formatLogTime(value: string | null | undefined, formatTime: (ms: number) => string) {
+function formatLogTime(value: string | null | undefined, formatter: Intl.DateTimeFormat) {
   if (!value) {
     return "";
   }
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : formatTime(date.getTime());
+  return Number.isNaN(date.getTime()) ? value : formatter.format(date.getTime());
 }
 
 export function LogsView(props: LogsProps) {
@@ -204,9 +204,7 @@ export function LogsView(props: LogsProps) {
             <For each={filtered()} fallback={<SettingsEmpty message={t("gatewayLogs.empty")} />}>
               {(entry) => (
                 <div class="log-row">
-                  <div class="log-time mono">
-                    {formatLogTime(entry.time, timeFormatter().format)}
-                  </div>
+                  <div class="log-time mono">{formatLogTime(entry.time, timeFormatter())}</div>
                   <div class={["log-level", entry.level ?? ""]}>{entry.level ?? ""}</div>
                   <div class="log-subsystem mono">{entry.subsystem ?? ""}</div>
                   <div class="log-message mono">{entry.message ?? entry.raw}</div>
