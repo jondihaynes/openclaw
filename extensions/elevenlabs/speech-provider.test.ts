@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 import { isValidElevenLabsVoiceId } from "./shared.js";
 import { buildElevenLabsSpeechProvider } from "./speech-provider-factory.js";
@@ -41,7 +41,9 @@ describe("elevenlabs speech provider", () => {
 
   function sentRequest() {
     const [{ url, init }] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs request");
-    const body: unknown = JSON.parse(String(init?.body));
+    const raw = init?.body;
+    assert(typeof raw === "string", "Expected a JSON request body");
+    const body: unknown = JSON.parse(raw);
     return { url: new URL(url), body };
   }
 

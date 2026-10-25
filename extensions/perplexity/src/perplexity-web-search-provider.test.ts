@@ -234,7 +234,15 @@ it.each([
   endpointMock.mockImplementation(async ({ signal }: { signal?: AbortSignal }) => {
     assert(signal, "Perplexity request lost caller cancellation");
     return new Promise<never>((_resolve, reject) => {
-      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      signal.addEventListener(
+        "abort",
+        () => {
+          const reason: unknown = signal.reason;
+          assert(reason instanceof Error, "Expected an Error cancellation reason");
+          reject(reason);
+        },
+        { once: true },
+      );
     });
   });
   const controller = new AbortController();
