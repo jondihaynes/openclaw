@@ -35,7 +35,7 @@ function routeData(sessions: SessionsListResult["sessions"], basePath = ""): Das
   };
 }
 
-it("keeps unfocused card text and links while deferring decoration until native focus", async () => {
+it("keeps card text, links and arrows while deferring previews until native focus", async () => {
   const { request } = createFrameQueue();
   vi.spyOn(window, "requestAnimationFrame").mockImplementation(request);
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
@@ -59,7 +59,7 @@ it("keeps unfocused card text and links while deferring decoration until native 
   expect(card.querySelector(".dashboard-card__author")?.textContent).toContain("By Mira");
   expect(card.querySelector(".dashboard-card__footer")?.textContent).toContain("Updated");
   expect(card.querySelector(".dashboard-card__open")).not.toBeNull();
-  expect(card.querySelector(".dashboard-card__open svg")).toBeNull();
+  expect(card.querySelector(".dashboard-card__open svg")).not.toBeNull();
 
   link.focus();
   flush();

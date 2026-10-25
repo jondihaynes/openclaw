@@ -161,9 +161,7 @@ function DashboardCard(props: {
         </span>
         <Show when={target()}>
           <span class="dashboard-card__open" aria-hidden="true">
-            <Show when={nearVisible()}>
-              <Icon name="arrowUpRight" />
-            </Show>
+            <Icon name="arrowUpRight" />
           </span>
         </Show>
       </footer>
