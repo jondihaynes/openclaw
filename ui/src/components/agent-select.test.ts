@@ -104,39 +104,6 @@ it("renders named scope icons and restores the selected agent avatar", async () 
   expect(trigger.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
 });
 
-it("retains option content while controlled selection and disabled state change", async () => {
-  const element = await createAgentSelect();
-  const originalRows = options.map(({ value }) => {
-    const row = element.querySelector<HTMLButtonElement>(`[data-agent-option][value="${value}"]`)!;
-    const avatar = row.querySelector(".agent-select__avatar");
-    const content = row.querySelector(".agent-select__option-copy");
-    expect(avatar).not.toBeNull();
-    expect(content).not.toBeNull();
-    return { value, row, avatar, content };
-  });
-
-  for (const disabled of [false, true, false]) {
-    element.value = "beta";
-    element.disabled = disabled;
-    await element.updateComplete;
-    await waitForSolid(() => {
-      for (const original of originalRows) {
-        const row = element.querySelector<HTMLButtonElement>(
-          `[data-agent-option][value="${original.value}"]`,
-        )!;
-        const selected = original.value === "beta";
-        expect(row).toBe(original.row);
-        expect(row.querySelector(".agent-select__avatar")).toBe(original.avatar);
-        expect(row.querySelector(".agent-select__option-copy")).toBe(original.content);
-        expect(row.getAttribute("aria-checked")).toBe(selected ? "true" : "false");
-        expect(row.hasAttribute("data-selected")).toBe(selected);
-        expect(row.hasAttribute("data-initial-focus")).toBe(selected && !disabled);
-        expect(row.disabled).toBe(disabled);
-      }
-    });
-  }
-});
-
 it("keeps a failed avatar on its fallback until the image changes", async () => {
   const invalidAvatar = "data:image/gif;base64,bm90LWFuLWltYWdl";
   const replacementAvatar = "data:image/png;base64,cmVwbGFjZW1lbnQ=";

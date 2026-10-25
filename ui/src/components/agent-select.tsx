@@ -71,19 +71,14 @@ defineSolidBridge<AgentSelectProps>(
       const resolved = () => avatars().get(avatarProps.option.value);
       return <AgentOptionAvatar option={avatarProps.option} avatar={resolved()} />;
     }
-    // Keep row content mounted when only selection or disabled state changes.
     const items = createMemo<readonly MenuItem[]>(() =>
       props.options.map((option) => ({
         id: `option:${option.value}`,
         label: [option.label, option.description, option.badge].filter(Boolean).join(", "),
         class: "agent-select__option",
         type: "radio" as const,
-        get checked() {
-          return option.value === props.value;
-        },
-        get disabled() {
-          return props.disabled || option.disabled;
-        },
+        checked: option.value === props.value,
+        disabled: props.disabled || option.disabled,
         icon: <Avatar option={option} />,
         content: (
           <span class="agent-select__option-copy">
@@ -109,15 +104,10 @@ defineSolidBridge<AgentSelectProps>(
         ),
         attributes: {
           "data-agent-option": "",
-          get "data-selected"() {
-            return option.value === props.value ? "" : undefined;
-          },
+          "data-selected": option.value === props.value ? "" : undefined,
           value: option.value,
-          get "data-initial-focus"() {
-            return option.value === props.value && !props.disabled && !option.disabled
-              ? ""
-              : undefined;
-          },
+          "data-initial-focus":
+            option.value === props.value && !props.disabled && !option.disabled ? "" : undefined,
         },
       })),
     );
