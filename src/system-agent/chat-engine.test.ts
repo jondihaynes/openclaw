@@ -11,10 +11,11 @@ import {
   mocks,
   operationMocks,
   createSystemAgentVerifiedInferenceTestFixture,
-  fakeOverviewLoader,
   useTempStateDir,
   configSnapshot,
   createAmbientVerifiedBinding,
+  createChatEngine,
+  inferenceConfig,
   SystemAgentChatEngine,
   RuntimeSystemAgentChatEngine,
   runSystemAgentTurn,
@@ -29,20 +30,7 @@ vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
 }));
 
 async function driftFixture() {
-  const config: OpenClawConfig = {
-    agents: { defaults: { model: "openai/gpt-5.5" } },
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          apiKey: "test-key",
-          auth: "api-key",
-          models: [],
-        },
-      },
-    },
-  };
-  const configFixture = await createInferenceConfigFixture(config);
+  const configFixture = await createInferenceConfigFixture(inferenceConfig());
   const snapshot = configFixture.snapshot;
   mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
   return {
@@ -56,66 +44,64 @@ async function driftFixture() {
   };
 }
 
+async function verifiedEngine(
+  config: OpenClawConfig,
+  options: Omit<SystemAgentChatEngineOptions, "verifiedInference">,
+) {
+  useTempStateDir();
+  const inference = await createSystemAgentVerifiedInferenceTestFixture(config);
+  mocks.readConfigFileSnapshot.mockImplementation(async () => configSnapshot(config));
+  return {
+    engine: createChatEngine({ verifiedInference: inference.binding, ...options }, true),
+    binding: inference.binding,
+  };
+}
+
 describe("SystemAgentChatEngine facade", () => {
   it.each(["requester", "alternate"])("preserves runtime ownership for %s", async (requester) => {
-    useTempStateDir();
     const config: OpenClawConfig = {
       agents: {
         defaults: { model: "openai/gpt-5.5" },
         entries: { alternate: { model: "openai/gpt-5.5" } },
       },
     };
-    const inference = await createSystemAgentVerifiedInferenceTestFixture(config);
-    expect(inference.binding.execution.agentId).toBe("alternate");
     const inheritedGeneration = {} as PreparedModelRuntimePluginGeneration;
     const observedGenerations: Array<PreparedModelRuntimePluginGeneration | undefined> = [];
-    const runEmbeddedAgent = vi.fn(async () => {
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async () => {
       observedGenerations.push(getPreparedModelRuntimePluginGeneration());
       return { meta: { durationMs: 0, finalAssistantVisibleText: "ready" } };
-    });
-    const planGreeting = vi.fn(async () => {
-      observedGenerations.push(getPreparedModelRuntimePluginGeneration());
-      return null;
     });
     vi.spyOn(
       await import("./assistant.js"),
       "planSystemAgentGreetingWithConfiguredModel",
-    ).mockImplementation(planGreeting);
-    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
-    mocks.readConfigFileSnapshot.mockImplementation(async () => configSnapshot(config));
-    const engine = new SystemAgentChatEngine({
-      requesterAgentId: requester,
-      verifiedInference: inference.binding,
-      runAgentTurn: runSystemAgentTurn,
-      deps: {
-        loadOverview: fakeOverviewLoader(),
-      },
+    ).mockImplementation(async () => {
+      observedGenerations.push(getPreparedModelRuntimePluginGeneration());
+      return null;
     });
-    try {
-      await withPreparedModelRuntimePluginGenerationScope(inheritedGeneration, () =>
-        engine.handle("continue setup"),
-      );
-      await withPreparedModelRuntimePluginGenerationScope(inheritedGeneration, () =>
-        engine.planGreeting({ overview: {} as never, facts: {} as never, timeoutMs: 10 }),
-      );
-      const expectedGeneration = requester === "alternate" ? inheritedGeneration : undefined;
-      expect(observedGenerations).toEqual([expectedGeneration, expectedGeneration]);
-    } finally {
-      await engine.dispose();
-    }
+    const { engine, binding } = await verifiedEngine(config, {
+      requesterAgentId: requester,
+      runAgentTurn: runSystemAgentTurn,
+    });
+    expect(binding.execution.agentId).toBe("alternate");
+    await withPreparedModelRuntimePluginGenerationScope(inheritedGeneration, () =>
+      engine.handle("continue setup"),
+    );
+    await withPreparedModelRuntimePluginGenerationScope(inheritedGeneration, () =>
+      engine.planGreeting({ overview: {} as never, facts: {} as never, timeoutMs: 10 }),
+    );
+    const expectedGeneration = requester === "alternate" ? inheritedGeneration : undefined;
+    expect(observedGenerations).toEqual([expectedGeneration, expectedGeneration]);
   });
 
   it("ends a partial timed-out agent turn without starting a second planner inference", async () => {
-    useTempStateDir();
     const config: OpenClawConfig = {
       agents: { defaults: { model: "openai/gpt-5.6-luna" } },
     };
-    const inference = await createSystemAgentVerifiedInferenceTestFixture(config);
     const planner = vi
       .spyOn(await import("./assistant.js"), "planSystemAgentCommand")
       .mockResolvedValue({ reply: "A second inference ran." });
     const runEmbeddedAgent = vi
-      .fn<typeof embeddedAgent.runEmbeddedAgent>()
+      .spyOn(embeddedAgent, "runEmbeddedAgent")
       .mockResolvedValueOnce({
         meta: {
           durationMs: 120_000,
@@ -127,10 +113,7 @@ describe("SystemAgentChatEngine facade", () => {
       })
       .mockResolvedValue({ meta: { durationMs: 1, finalAssistantVisibleText: "Ready to retry." } });
     let failedSession: SystemAgentSession | undefined;
-    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
-    mocks.readConfigFileSnapshot.mockImplementation(async () => configSnapshot(config));
-    const engine = new SystemAgentChatEngine({
-      verifiedInference: inference.binding,
+    const { engine } = await verifiedEngine(config, {
       runAgentTurn: (params) => {
         failedSession = params.session;
         params.session.proposalRef.current = "unfinished-proposal";
@@ -138,29 +121,21 @@ describe("SystemAgentChatEngine facade", () => {
         params.session.cliSession = { routeKey: "old", binding: { sessionId: "old" } };
         return runSystemAgentTurn(params);
       },
-      deps: {
-        loadOverview: fakeOverviewLoader(),
-      },
     });
-    try {
-      await expect(engine.handle("What is the next setup step?")).rejects.toMatchObject({
-        code: "SYSTEM_AGENT_INFERENCE_UNAVAILABLE",
-        message: expect.stringContaining("The setup turn timed out."),
-      });
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expect(planner).not.toHaveBeenCalled();
-      expect(engine.getPendingOperatorProposal()).toBeNull();
-      expect(failedSession?.cliSession).toBeUndefined();
-      expect(engine.historyLength()).toBe(0);
-      await expect(engine.handle("Try the next step again.")).resolves.toMatchObject({
-        text: "Ready to retry.",
-      });
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-      expect(planner).not.toHaveBeenCalled();
-    } finally {
-      planner.mockRestore();
-      await engine.dispose();
-    }
+    await expect(engine.handle("What is the next setup step?")).rejects.toMatchObject({
+      code: "SYSTEM_AGENT_INFERENCE_UNAVAILABLE",
+      message: expect.stringContaining("The setup turn timed out."),
+    });
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(planner).not.toHaveBeenCalled();
+    expect(engine.getPendingOperatorProposal()).toBeNull();
+    expect(failedSession?.cliSession).toBeUndefined();
+    expect(engine.historyLength()).toBe(0);
+    await expect(engine.handle("Try the next step again.")).resolves.toMatchObject({
+      text: "Ready to retry.",
+    });
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    expect(planner).not.toHaveBeenCalled();
   });
 
   it("rejects a seeded approval when its binding changes during classification", async () => {
@@ -183,18 +158,10 @@ describe("SystemAgentChatEngine facade", () => {
 
   it("rejects a setup write without a verified inference binding", async () => {
     useTempStateDir();
-    const applySetup = operationMocks.applySetup;
-    expect(
-      () =>
-        new RuntimeSystemAgentChatEngine({
-          surface: "cli",
-          runAgentTurn: async () => null,
-          deps: {
-            loadOverview: fakeOverviewLoader(),
-          },
-        } as unknown as SystemAgentChatEngineOptions),
-    ).toThrow("openclaw onboard");
-    expect(applySetup).not.toHaveBeenCalled();
+    expect(() => new RuntimeSystemAgentChatEngine({} as SystemAgentChatEngineOptions)).toThrow(
+      "openclaw onboard",
+    );
+    expect(operationMocks.applySetup).not.toHaveBeenCalled();
   });
 
   it("does not expose an agent reply after its inference owner drifts", async () => {
@@ -203,12 +170,9 @@ describe("SystemAgentChatEngine facade", () => {
       await drift();
       return { text: "stale reply" };
     });
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       verifiedInference,
       runAgentTurn,
-      deps: {
-        loadOverview: fakeOverviewLoader(),
-      },
     });
 
     await expect(engine.handle("what should I do next?")).rejects.toMatchObject({
@@ -217,11 +181,10 @@ describe("SystemAgentChatEngine facade", () => {
   });
 
   it("preserves the inference failure without a second model attempt", async () => {
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       runAgentTurn: async () => {
         throw new Error("workspace owner openclaw is missing from the roster");
       },
-      deps: { loadOverview: fakeOverviewLoader() },
     });
 
     await expect(engine.handle("please make everything nice")).rejects.toThrow(
