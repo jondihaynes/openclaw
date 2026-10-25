@@ -23,8 +23,11 @@ function chatResponse(content = "Grounded answer", citations?: string[]) {
   return { choices: [{ message: { content } }], ...(citations ? { citations } : {}) };
 }
 
-const request = (): { url: string; init: RequestInit; signal?: AbortSignal } =>
-  endpointMock.mock.calls[0][0];
+const request = (): { url: string; init: RequestInit; signal?: AbortSignal } => {
+  const call = endpointMock.mock.calls[0];
+  assert(call, "Expected an endpoint request");
+  return call[0];
+};
 const requestBody = () => JSON.parse(request().init.body as string);
 
 type RoutingCase = {

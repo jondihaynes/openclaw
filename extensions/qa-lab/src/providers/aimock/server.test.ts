@@ -57,7 +57,7 @@ describe("qa aimock server", () => {
   const responses = (text: string, extra: Record<string, unknown> = {}) =>
     json("/v1/responses", { model, stream: false, input: [makeResponsesInput(text)], ...extra });
   const debug = (path: string, code = 200) => json(`/debug/${path}`, undefined, code);
-  const matches = async (path: string, expected: unknown) =>
+  const matches = async (path: string, expected: Record<string, unknown> | unknown[]) =>
     expect(await debug(path)).toMatchObject(expected);
   const equals = async (path: string, expected: unknown) =>
     expect(await debug(path)).toEqual(expected);
