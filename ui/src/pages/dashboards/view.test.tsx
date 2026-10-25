@@ -35,7 +35,7 @@ function routeData(sessions: SessionsListResult["sessions"], basePath = ""): Das
   };
 }
 
-it("keeps card text, links and arrows while deferring previews until native focus", async () => {
+it("keeps native card content and focus while previews await viewport activation", async () => {
   const { request } = createFrameQueue();
   vi.spyOn(window, "requestAnimationFrame").mockImplementation(request);
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
@@ -55,7 +55,7 @@ it("keeps card text, links and arrows while deferring previews until native focu
   const link = card.querySelector<HTMLAnchorElement>("a")!;
   expect(card.querySelector("h2")?.textContent).toBe("Deploy monitor");
   expect(link.getAttribute("href")).toContain("/dashboard/main/deploy-monitor-");
-  expect(card.querySelector("openclaw-dashboard-preview")).toBeNull();
+  expect(card.querySelector("openclaw-dashboard-preview")).not.toBeNull();
   expect(card.querySelector(".dashboard-card__author")?.textContent).toContain("By Mira");
   expect(card.querySelector(".dashboard-card__footer")?.textContent).toContain("Updated");
   expect(card.querySelector(".dashboard-card__open")).not.toBeNull();

@@ -1,17 +1,6 @@
-import {
-  Errored,
-  For,
-  Loading,
-  Show,
-  createMemo,
-  createSignal,
-  isPending,
-  latest,
-  onSettled,
-} from "solid-js";
+import { Errored, For, Loading, Show, createMemo, isPending, latest } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { NearViewportObserver } from "../../components/near-viewport-observer.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
@@ -92,22 +81,6 @@ function DashboardCard(props: {
   handlers: DashboardGalleryHandlers;
   gatewaySnapshot?: ApplicationGatewaySnapshot;
 }) {
-  let card!: HTMLElement;
-  const [nearVisible, setNearVisible] = createSignal(false);
-  onSettled(() => {
-    let active = true;
-    const visibility = new NearViewportObserver(200, () => {
-      if (active) {
-        setNearVisible(visibility.nearVisible);
-      }
-    });
-    const frame = window.requestAnimationFrame(() => visibility.observe(card));
-    return () => {
-      active = false;
-      window.cancelAnimationFrame(frame);
-      visibility.disconnect();
-    };
-  });
   const target = createMemo(() =>
     isSessionKeyAddressable(props.row.key, props.data.globalScope)
       ? sessionNavigationTarget({
@@ -128,13 +101,11 @@ function DashboardCard(props: {
   const Content = () => (
     <>
       <div class="dashboard-preview" aria-hidden="true" inert>
-        <Show when={nearVisible()}>
-          <DashboardPreview
-            gatewaySnapshot={props.gatewaySnapshot}
-            sessionKey={props.row.key}
-            agentId={props.row.agentId}
-          />
-        </Show>
+        <DashboardPreview
+          gatewaySnapshot={props.gatewaySnapshot}
+          sessionKey={props.row.key}
+          agentId={props.row.agentId}
+        />
       </div>
       <div class="dashboard-card__body">
         <div class="dashboard-card__heading">
@@ -168,14 +139,7 @@ function DashboardCard(props: {
     </>
   );
   return (
-    <article
-      ref={(element) => {
-        card = element;
-      }}
-      class="dashboard-card"
-      data-dashboard-session={props.row.key}
-      onFocusIn={() => setNearVisible(true)}
-    >
+    <article class="dashboard-card" data-dashboard-session={props.row.key}>
       <Show
         when={target()}
         fallback={

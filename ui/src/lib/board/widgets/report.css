@@ -34,12 +34,6 @@ openclaw-report-widget {
   }
 }
 
-/* Fixed widgets own their height even while offscreen report contents are skipped. */
-.board-report--fixed {
-  content-visibility: auto;
-  contain-intrinsic-block-size: auto 280px;
-}
-
 .board-report__text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

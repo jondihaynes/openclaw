@@ -185,7 +185,7 @@ function ReportWidgetContent(props: ReportWidgetProps) {
     <Show when={content().report} fallback={<BoardWidgetError error={content().error} />}>
       {(report) => (
         <article
-          class={["board-report", { "board-report--fixed": props.widget?.heightMode === "fixed" }]}
+          class="board-report"
           aria-label={props.widget?.title ?? t("board.widget.kindReport")}
         >
           <For each={report().blocks}>{(block) => <ReportBlockView block={block} />}</For>

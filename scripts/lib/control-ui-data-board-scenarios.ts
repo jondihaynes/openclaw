@@ -383,12 +383,12 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
   {
     id: "data-dashboards-responsive-navigation",
     dataPage: "dashboards",
+    diagnostic: "Multi-viewport correctness and capture; not a timing comparison.",
     route: "/dashboards",
     expected:
       "All 1,000 titles and links remain native, the final card reveals its content on focus, and 3/2/1-column layouts fit the viewport.",
     fixtureOverrides: createGalleryFixture,
     prepare: prepareGallery,
-    // Multi-viewport correctness/capture proof; do not include in timing comparisons.
     run: async (page) => {
       const finalCard = page.locator('[data-dashboard-session="agent:main:data-gallery-999"]');
       const finalLink = finalCard.locator("a.dashboard-card__main");
