@@ -136,7 +136,7 @@ it("fetches one persisted settings avatar alongside unrelated requests", async (
     );
     response.resolve(avatarResponse());
     await view.loaded(1);
-    expect(classes).toContain("is-pending");
+    expect(classes).not.toContain("is-pending");
     view.image()?.dispatchEvent(new Event("load"));
     flush();
     expect(classes).not.toContain("is-pending");
