@@ -150,6 +150,19 @@ describe("GitHub PR checks through the document loader", () => {
     expect(JSON.stringify(detail)).not.toContain("sensitive upstream");
   });
 
+  it("honors anonymous quota cooldown without losing the body or spending requests", async () => {
+    const fetchMock = publicFetch(json({}, 429, { "retry-after": "60" }));
+    const read = reader(fetchMock);
+    const first = await read();
+    expectChecksDocument(first, {
+      state: "unavailable",
+      summary: "Checks unavailable",
+      items: [],
+    });
+    expect(await read()).toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it.each([undefined, "../main"])("rejects invalid head %s", async (headSha) => {
     const fetchMock = publicFetch(runs(), statuses(), {
       ...pull(),

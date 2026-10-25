@@ -142,6 +142,40 @@ it.each([
   expect(Object.fromEntries(fetchRequestUrl().searchParams)).toMatchObject(expected);
 });
 
+it.each([
+  { mode: "web", cacheTtlMinutes: 0 },
+  { mode: "llm-context", cacheTtlMinutes: 1 },
+])("honors current $mode cache TTL $cacheTtlMinutes", async ({ mode, cacheTtlMinutes }) => {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  let requestCount = 0;
+  mockFetch.mockImplementation(async () => {
+    const result = { url: `https://example.com/result-${++requestCount}` };
+    return Response.json(
+      mode === "web" ? { web: { results: [result] } } : { grounding: { generic: [result] } },
+    );
+  });
+  const cachedTool = createBraveTool({ mode }, { searchConfig: { cacheTtlMinutes: 15 } });
+  const currentTool = createBraveTool({ mode }, { searchConfig: { cacheTtlMinutes } });
+  const args = { query: `ttl-${mode}` };
+  const original = await cachedTool.execute(args);
+  expect(original).toMatchObject({ results: [{ url: "https://example.com/result-1" }] });
+  await expectCached(() => cachedTool.execute(args), original, 1);
+  clock.mockReturnValue(now + 60_000);
+  const fresh = await currentTool.execute(args);
+  expect(fresh).toMatchObject({ results: [{ url: "https://example.com/result-2" }] });
+  expect(fresh).not.toHaveProperty("cached");
+  expect(mockFetch).toHaveBeenCalledTimes(2);
+  if (cacheTtlMinutes === 0) {
+    expect(await currentTool.execute(args)).toMatchObject({
+      results: [{ url: "https://example.com/result-3" }],
+    });
+    await expectCached(() => cachedTool.execute(args), original, 3);
+  } else {
+    await expectCached(() => currentTool.execute(args), fresh, 2);
+  }
+});
+
 it.each(["web", "llm-context"] as const)("maps and caches %s", async (mode) => {
   const urls = [0, 1, 2, 3].map((i) => `https://example.com/${i}`);
   const timestamp = "2024-01-15T13:45:02Z";

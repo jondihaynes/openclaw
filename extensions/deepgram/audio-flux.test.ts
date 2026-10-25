@@ -10,6 +10,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { commandResult } from "../test-support/command-result.test-support.js";
+import { isDeepgramFluxModel } from "./audio-flux.js";
 import plugin from "./index.js";
 import { createSocketServer } from "./websocket.test-support.js";
 
@@ -44,10 +45,15 @@ const transcribeAudio = expectDefined(
 async function createFluxServer(onFlush = (socket: WebSocket) => socket.close()) {
   const audioFrames: Buffer[] = [];
   const { baseUrl, requests } = await createSocketServer((client) => {
-    client.on("message", (data: Buffer, isBinary: boolean) => {
+    client.on("message", (data, isBinary) => {
+      const bytes = Array.isArray(data)
+        ? Buffer.concat(data)
+        : Buffer.isBuffer(data)
+          ? data
+          : Buffer.from(data);
       if (isBinary) {
-        audioFrames.push(data);
-      } else if (asOptionalRecord(JSON.parse(data.toString()))?.type === "CloseStream") {
+        audioFrames.push(bytes);
+      } else if (asOptionalRecord(JSON.parse(bytes.toString()))?.type === "CloseStream") {
         onFlush(client);
       }
     });
@@ -109,6 +115,12 @@ it("keeps decoding, connection preparation, and transcription within one deadlin
   await transcription;
   expect(errors).toEqual([expect.any(Error)]);
   expect(errors[0]).toMatchObject({ message: expect.stringContaining("timed out") });
+});
+
+it("does not route ordinary model names through Flux", () => {
+  for (const model of ["flux", "reflux-general-en", "nova-3"]) {
+    expect(isDeepgramFluxModel(model)).toBe(false);
+  }
 });
 
 it.each([
