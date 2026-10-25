@@ -9,8 +9,8 @@ import { resolveOpenAICompletionsCompat } from "../../packages/ai/src/transports
 import type { Context, Model, ToolResultMessage } from "../../packages/ai/src/types.js";
 import { projectProviderError } from "../../packages/ai/src/utils/provider-error.js";
 import { createOpenClawReadTool } from "../agents/agent-tools.read.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
-import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
@@ -44,16 +44,14 @@ const toolImageContent = <T>(image: T) => [
 function toolExchange(content: ToolResultMessage["content"]): Context["messages"] {
   const id = "call-1";
   return [
-    {
-      role: "assistant",
+    makeAgentAssistantMessage({
       api: anthropicModel.api,
       provider: anthropicModel.provider,
       model: anthropicModel.id,
       content: [{ type: "toolCall", id, name: "read", arguments: {} }],
-      usage: createZeroUsageFixture(),
       stopReason: "toolUse",
       timestamp: 1,
-    },
+    }),
     { role: "toolResult", toolCallId: id, toolName: "read", content, isError: false, timestamp: 2 },
   ];
 }
@@ -150,32 +148,22 @@ it("redacts registered opaque secrets from ordinary provider error messages", ()
 });
 
 it("carries original tool results into Anthropic and OpenAI-compatible payloads", async () => {
-  const files: Record<string, string> = {
-    "settings.yaml": "api_key: unquoted-provider-config-credential-1234567890",
-    "production.env": "API_KEY=provider-env-credential-1234567890",
-    "settings.py": "API_TOKEN = computeToken()\nAPI_KEY: str = computeKey()\napi_key: ConfigValue",
-  };
+  const source = [
+    "api_key: unquoted-provider-config-credential-1234567890",
+    "API_KEY=provider-env-credential-1234567890",
+    "API_TOKEN = computeToken()\nAPI_KEY: str = computeKey()\napi_key: ConfigValue",
+  ].join("\n");
   const readTool = createOpenClawReadTool({
     name: "read",
     label: "read",
     description: "test read",
     parameters: Type.Object({ path: Type.String() }),
     execute: async (_toolCallId, args: { path: string }) => {
-      const text = files[args.path];
-      if (text === undefined) {
-        throw new Error(`Unexpected fixture path: ${args.path}`);
-      }
-      return {
-        content: [textBlock(text)],
-        details: { kind: "text", content: text },
-      };
+      expect(args.path).toBe("settings.txt");
+      return { content: [textBlock(source)], details: { kind: "text", content: source } };
     },
   });
-  const fileTexts: string[] = [];
-  for (const path of Object.keys(files)) {
-    const result = await readTool.execute(`read-${path}`, { path });
-    fileTexts.push(extractToolResultText(result.content));
-  }
+  const result = await readTool.execute("read-config", { path: "settings.txt" });
   const providerText = [
     extractToolResultText([
       {
@@ -185,7 +173,7 @@ it("carries original tool results into Anthropic and OpenAI-compatible payloads"
         api_key: "provider-secret-value",
       },
     ]),
-    ...fileTexts,
+    extractToolResultText(result.content),
   ].join("\n");
   const context: Context = {
     messages: toolExchange([textBlock(providerText)]),
@@ -211,7 +199,7 @@ it("carries original tool results into Anthropic and OpenAI-compatible payloads"
       "if let token = timeObserverToken {",
       String.raw`\\\"token\\\":\\\"timeObserverToken\\\"`,
       "provider-secret-value",
-      ...Object.values(files).flatMap((source) => source.split("\n")),
+      ...source.split("\n"),
     ]) {
       expect(serialized).toContain(text);
     }

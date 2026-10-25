@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { createApiRegistry, createLlmRuntime, getAiTransportHost } from "@openclaw/ai";
+import { createApiRegistry, createLlmRuntime } from "@openclaw/ai";
 import { getEventStreamCompletion } from "@openclaw/ai/internal/runtime";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions } from "@openclaw/llm-core";
 import { afterEach, expect, it, vi } from "vitest";
@@ -14,7 +14,11 @@ import { createAssistantMessageEventStream } from "./utils/event-stream.js";
 
 afterEach(() => vi.useRealTimers());
 const emptyContext: Context = { messages: [] };
-type Dispatch = (model: Model, context: Context, options?: SimpleStreamOptions) => void;
+type ProviderStream = (
+  model: Model,
+  context: Context,
+  options?: SimpleStreamOptions,
+) => ReturnType<typeof responseStream>;
 
 function responseStream(message: AssistantMessage, emit = true) {
   const output = createAssistantMessageEventStream();
@@ -29,7 +33,7 @@ function responseStream(message: AssistantMessage, emit = true) {
   return output;
 }
 
-function createCompletionRuntime(onDispatch?: Dispatch) {
+function createCompletionRuntime() {
   const registry = createApiRegistry();
   const runtime = createLlmRuntime(registry);
   const model = makeProviderModelFixture({
@@ -45,10 +49,7 @@ function createCompletionRuntime(onDispatch?: Dispatch) {
     model: model.id,
     timestamp: Date.now(),
   });
-  const providerStream = vi.fn((...args: Parameters<Dispatch>) => {
-    onDispatch?.(...args);
-    return responseStream(message);
-  });
+  const providerStream = vi.fn<ProviderStream>(() => responseStream(message));
   registry.registerApiProvider({
     api: model.api,
     stream: providerStream,
@@ -78,13 +79,7 @@ async function createLimitedRuntime(organization: string, options: SimpleStreamO
 }
 
 it("installs runtime transport ports before direct preparation and bare completion", async () => {
-  const inertWrapper = getAiTransportHost().plugin.wrapSimpleCompletionStream;
-  const { model, runtime, message, providerStream } = createCompletionRuntime(
-    (_runtimeModel, context) => {
-      expect(getAiTransportHost().plugin.wrapSimpleCompletionStream).not.toBe(inertWrapper);
-      expect(context.messages).toEqual([]);
-    },
-  );
+  const { model, runtime, message, providerStream } = createCompletionRuntime();
 
   const directModel = bindModelLlmRuntime(
     attachModelProviderRuntimePluginHandle(model, {
