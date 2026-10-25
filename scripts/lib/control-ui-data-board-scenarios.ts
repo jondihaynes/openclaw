@@ -436,17 +436,17 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
           await page
             .locator(`${galleryHost} .dashboards-grid`)
             .evaluate((grid, expectedColumns) => {
-              const columns = getComputedStyle(grid).gridTemplateColumns.split(" ").length;
+              const renderedColumns = getComputedStyle(grid).gridTemplateColumns.split(" ").length;
               const bounds = grid.getBoundingClientRect();
               if (
-                columns !== expectedColumns ||
+                renderedColumns !== expectedColumns ||
                 bounds.left < -1 ||
                 bounds.right > innerWidth + 1 ||
                 grid.scrollWidth > grid.clientWidth + 1 ||
                 document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
               ) {
                 throw new Error(
-                  `Gallery layout overflows or has ${columns} columns, expected ${expectedColumns}`,
+                  `Gallery layout overflows or has ${renderedColumns} columns, expected ${expectedColumns}`,
                 );
               }
             }, columns);

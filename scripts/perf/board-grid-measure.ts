@@ -17,7 +17,9 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "5" },
   },
 });
-if (!values.base) throw new Error("--base <git revision> is required");
+if (!values.base) {
+  throw new Error("--base <git revision> is required");
+}
 const pairs = Number(values.pairs);
 const iterations = Number(values.iterations);
 if (!Number.isInteger(pairs) || pairs < 10 || !Number.isInteger(iterations) || iterations < 1) {
@@ -58,13 +60,15 @@ function items(count: number, kind: "full" | "mixed"): BoardGridItem[] {
 function measure(grid: GridModule, workload: BoardGridItem[]) {
   const before = process.cpuUsage();
   const started = performance.now();
-  for (let index = 0; index < iterations; index++) grid.layout(workload);
+  for (let index = 0; index < iterations; index++) {
+    grid.layout(workload);
+  }
   const wallMs = (performance.now() - started) / iterations;
   const cpu = process.cpuUsage(before);
   return { wallMs, cpuMs: (cpu.user + cpu.system) / 1_000 / iterations };
 }
-function distribution(values: number[]) {
-  const sorted = values.toSorted((a, b) => a - b);
+function distribution(samples: number[]) {
+  const sorted = samples.toSorted((a, b) => a - b);
   return {
     median: sorted[Math.floor(sorted.length / 2)]!,
     p95: sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)]!,
@@ -92,10 +96,14 @@ for (const kind of ["full", "mixed"] as const) {
     const controlSamples = [];
     const headSamples = [];
     for (let index = 0; index < pairs; index++) {
-      if (index % 2) headSamples.push(measure(candidate, workload));
+      if (index % 2) {
+        headSamples.push(measure(candidate, workload));
+      }
       baseSamples.push(measure(baseline, workload));
       controlSamples.push(measure(baseline, workload));
-      if (!(index % 2)) headSamples.push(measure(candidate, workload));
+      if (!(index % 2)) {
+        headSamples.push(measure(candidate, workload));
+      }
     }
     results.push({
       kind,
