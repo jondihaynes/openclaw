@@ -52,33 +52,28 @@ type WakeInput = {
   textForCommands: string;
 };
 
+type WakeDispatch = {
+  raw: unknown;
+  adapter: {
+    ingest: (raw: unknown) => WakeInput;
+    resolveTurn: (input: WakeInput) => Promise<{
+      delivery: { deliver: () => Promise<{ visibleReplySent: false }> };
+    }>;
+  };
+};
+
 function createContext(accountId = "default", stateDir?: string) {
   const controller = new AbortController();
   const status: ChannelAccountSnapshot = { accountId, running: false };
-  const run = vi.fn(
-    async (params: {
-      raw: unknown;
-      adapter: {
-        ingest: (raw: unknown) => WakeInput;
-        resolveTurn: (input: WakeInput) => Promise<{
-          delivery: { deliver: () => Promise<{ visibleReplySent: false }> };
-        }>;
-      };
-    }) => {
-      const input = params.adapter.ingest(params.raw);
-      const turn = await params.adapter.resolveTurn(input);
-      await turn.delivery.deliver();
-    },
-  );
+  const run = vi.fn(async ({ raw, adapter }: WakeDispatch) => {
+    const turn = await adapter.resolveTurn(adapter.ingest(raw));
+    await turn.delivery.deliver();
+  });
   const buildContext = vi.fn(() => ({}));
   const ctx = {
     cfg: {},
     accountId,
-    account: {
-      accountId,
-      enabled: true,
-      profile: "openclaw",
-    },
+    account: { accountId, enabled: true, profile: "openclaw" },
     abortSignal: controller.signal,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     getStatus: () => status,
@@ -138,8 +133,7 @@ async function startGateway(fixture = createContext()) {
   });
   vi.mocked(createChannelReplayGuard<WakeEvent>).mockReturnValueOnce(fixture.wakeDedupe);
   const lifecycle = startAccount(fixture);
-  const { start } = lifecycle;
-  void start.catch(bridge.started.reject);
+  void lifecycle.start.catch(bridge.started.reject);
   const { endpoint, token } = await withTimeout(bridge.started.promise, 500, "Raft bridge startup");
   return {
     ...fixture,
@@ -192,10 +186,9 @@ it.each(["claim", "commit"] as const)(
       reached.resolve();
       await pending.promise;
     };
-    let processing: Promise<unknown> | undefined;
     const processGuarded = wakeDedupe.processGuarded.bind(wakeDedupe);
-    wakeDedupe.processGuarded = (event, process, options) => {
-      const operation = processGuarded(
+    wakeDedupe.processGuarded = (event, process, options) =>
+      processGuarded(
         event,
         async () => {
           if (phase === "claim") {
@@ -209,13 +202,7 @@ it.each(["claim", "commit"] as const)(
         },
         options,
       );
-      processing = operation;
-      return operation;
-    };
     const { post, start } = await startGateway(fixture);
-    cleanups.push(async () => {
-      await processing?.catch(() => undefined);
-    });
     const stopped = vi.fn();
     const settled = start.finally(stopped);
     const request = post({ eventId: "wake-settlement" }).catch(() => undefined);
@@ -257,9 +244,7 @@ it("keeps delivering 413 for an over-limit wake payload and closing the connecti
     statusLine: "HTTP/1.1 413 Payload Too Large",
     closedByServer: true,
   });
-  expect(JSON.parse(result.body)).toEqual({
-    error: "Wake payload exceeds the 16 KiB limit.",
-  });
+  expect(JSON.parse(result.body)).toEqual({ error: "Wake payload exceeds the 16 KiB limit." });
   expect(run).not.toHaveBeenCalled();
 });
 
