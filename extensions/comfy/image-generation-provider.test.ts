@@ -31,10 +31,7 @@ const { fetchWithSsrFGuardMock, ssrfGuardState } = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
   ssrfGuardState.actual = actual.fetchWithSsrFGuard;
-  return {
-    ...actual,
-    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-  };
+  return { ...actual, fetchWithSsrFGuard: fetchWithSsrFGuardMock };
 });
 
 const comfyProviders = registerComfyProviders();
@@ -50,7 +47,6 @@ const privateCloud = {
 };
 
 type RealGuardParams = Parameters<FetchWithSsrFGuard>[0];
-type RealGuardFetchImpl = NonNullable<RealGuardParams["fetchImpl"]>;
 type RealGuardLookupFn = NonNullable<RealGuardParams["lookupFn"]>;
 type RealComfyFetchOptions = {
   dns: Record<string, string>;
@@ -66,31 +62,27 @@ function fetchRequest(call: number): RealGuardParams {
   return request;
 }
 
-function parseJsonBody(call: number): Record<string, unknown> {
-  return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
-}
+const parseJsonBody = (call: number) => parseComfyJsonBody(fetchWithSsrFGuardMock, call);
+const isConfigured = (cfg: ImageRequest["cfg"]) =>
+  comfyProviders.image.isConfiguredAsync?.({ cfg });
 
 function mockLocalImageResponses(
   promptId = "local-prompt-1",
-  download: { body: BodyInit; contentType: string } = {
-    body: Buffer.from("png-data"),
-    contentType: "image/png",
-  },
+  body = "png-data",
   filename = "generated.png",
 ) {
   fetchWithSsrFGuardMock
     .mockResolvedValueOnce(fetchGuardJson({ prompt_id: promptId }))
     .mockResolvedValueOnce(fetchGuardJson(generatedHistory(promptId, filename)))
-    .mockResolvedValueOnce(fetchGuardResponse(download.body, download.contentType));
+    .mockResolvedValueOnce(fetchGuardResponse(Buffer.from(body), "image/png"));
+}
+
+function workflow(text = "", nodes: Record<string, unknown> = {}) {
+  return { "6": { inputs: { text } }, "9": { inputs: {} }, ...nodes };
 }
 
 function testWorkflowConfig(config: Record<string, unknown> = {}) {
-  return {
-    workflow: { "6": { inputs: { text: "" } }, "9": { inputs: {} } },
-    promptNodeId: "6",
-    outputNodeId: "9",
-    ...config,
-  };
+  return { workflow: workflow(), promptNodeId: "6", outputNodeId: "9", ...config };
 }
 
 type ImageRequest = Parameters<typeof comfyProviders.image.generateImage>[0];
@@ -111,11 +103,7 @@ function generateImage(
 function generatedHistory(promptId: string, filename = "generated.png") {
   return {
     [promptId]: {
-      outputs: {
-        "9": {
-          images: [{ filename, subfolder: "", type: "output" }],
-        },
-      },
+      outputs: { "9": { images: [{ filename, subfolder: "", type: "output" }] } },
     },
   };
 }
@@ -124,18 +112,13 @@ function createLookupFn(dns: Record<string, string>): RealGuardLookupFn {
   return (async (hostname: string, options?: unknown) => {
     const normalized = hostname.toLowerCase().replace(/\.+$/u, "");
     const address = dns[normalized] ?? "93.184.216.34";
-    const record: LookupAddress = {
-      address,
-      family: address.includes(":") ? 6 : 4,
-    };
-    if (
-      typeof options === "object" &&
+    const record: LookupAddress = { address, family: address.includes(":") ? 6 : 4 };
+    return typeof options === "object" &&
       options !== null &&
-      (options as { all?: unknown }).all === true
-    ) {
-      return [record];
-    }
-    return record;
+      "all" in options &&
+      options.all === true
+      ? [record]
+      : record;
   }) as RealGuardLookupFn;
 }
 
@@ -147,23 +130,20 @@ function installRealComfyFetchGuard(options: RealComfyFetchOptions) {
   const promptId = "real-guard-prompt-1";
   const body = options.body ?? Buffer.from("png-data");
   const fetchUrls: string[] = [];
-  const guardCalls: RealGuardParams[] = [];
   const lookupFn = createLookupFn(options.dns);
-  const fetchImpl: RealGuardFetchImpl = async (input) => {
+  const fetchImpl: NonNullable<RealGuardParams["fetchImpl"]> = async (input) => {
     const url = input instanceof Request ? input.url : String(input);
     fetchUrls.push(url);
     const parsed = new URL(url);
-    if (parsed.pathname.endsWith("/prompt")) {
-      return jsonResponse({ prompt_id: promptId });
-    }
-    if (parsed.pathname === `/api/job/${promptId}/status`) {
-      return jsonResponse({ status: "completed" });
-    }
-    if (
-      parsed.pathname === `/history/${promptId}` ||
-      parsed.pathname === `/api/history_v2/${promptId}`
-    ) {
-      return jsonResponse(generatedHistory(promptId));
+    const responses: Record<string, unknown> = {
+      "/prompt": { prompt_id: promptId },
+      "/api/prompt": { prompt_id: promptId },
+      [`/api/job/${promptId}/status`]: { status: "completed" },
+      [`/history/${promptId}`]: generatedHistory(promptId),
+      [`/api/history_v2/${promptId}`]: generatedHistory(promptId),
+    };
+    if (parsed.pathname in responses) {
+      return jsonResponse(responses[parsed.pathname]);
     }
     if (["/view", "/api/view"].includes(parsed.pathname) && options.redirectLocation) {
       return new Response(null, {
@@ -171,25 +151,17 @@ function installRealComfyFetchGuard(options: RealComfyFetchOptions) {
         headers: { location: options.redirectLocation },
       });
     }
-    return new Response(new Uint8Array(body), {
-      status: 200,
-      headers: { "content-type": "image/png" },
-    });
+    return fetchGuardResponse(new Uint8Array(body), "image/png").response;
   };
 
   const actualFetchWithSsrFGuard = ssrfGuardState.actual;
   if (!actualFetchWithSsrFGuard) {
     throw new Error("expected actual SSRF guard");
   }
-  fetchWithSsrFGuardMock.mockImplementation(async (params) => {
-    guardCalls.push(params);
-    return await actualFetchWithSsrFGuard({
-      ...params,
-      fetchImpl,
-      lookupFn,
-    });
-  });
-  return { fetchUrls, guardCalls };
+  fetchWithSsrFGuardMock.mockImplementation((params) =>
+    actualFetchWithSsrFGuard({ ...params, fetchImpl, lookupFn }),
+  );
+  return { fetchUrls };
 }
 
 describe("comfy image-generation provider", () => {
@@ -205,26 +177,19 @@ describe("comfy image-generation provider", () => {
   });
 
   it("falls back to legacy models.providers comfy config when plugin config is absent", async () => {
-    expect(
-      await comfyProviders.image.isConfiguredAsync?.({
-        cfg: buildLegacyComfyConfig({
-          workflow: { "6": { inputs: { text: "" } } },
-          promptNodeId: "6",
-        }),
-      }),
-    ).toBe(true);
+    expect(await isConfigured(buildLegacyComfyConfig(testWorkflowConfig()))).toBe(true);
   });
 
   it("treats cloud comfy workflows as configured with a plugin config env SecretRef", async () => {
     vi.stubEnv("COMFY_TEST_API_KEY", "comfy-secret-ref-key");
     expect(
-      await comfyProviders.image.isConfiguredAsync?.({
-        cfg: buildComfyConfig({
+      await isConfigured(
+        buildComfyConfig({
           mode: "cloud",
           apiKey: { source: "env", provider: "default", id: "COMFY_TEST_API_KEY" },
-          image: { workflow: { "6": { inputs: { text: "" } } }, promptNodeId: "6" },
+          image: testWorkflowConfig(),
         }),
-      }),
+      ),
     ).toBe(true);
   });
 
@@ -242,15 +207,10 @@ describe("comfy image-generation provider", () => {
       "Comfy workflow failed: Missing checkpoint",
     ],
   ] as const)("reports terminal local history %j after one lookup", async (status, error) => {
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(1_001);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-prompt-1" }))
-      .mockResolvedValueOnce(
-        fetchGuardJson({
-          "local-prompt-1": { status, outputs: {} },
-        }),
-      );
+      .mockResolvedValueOnce(fetchGuardJson({ "local-prompt-1": { status, outputs: {} } }));
 
     await expect(generateImage({ timeoutMs: 1_000 })).rejects.toThrow(error);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
@@ -276,21 +236,16 @@ describe("comfy image-generation provider", () => {
   });
 
   it("injects a fresh custom seed without mutating the workflow", async () => {
-    const seedInputName = "noise_seed";
     randomIntMock.mockReturnValueOnce(0).mockReturnValueOnce(2 ** 48 - 2);
     mockLocalImageResponses("seed-prompt-1");
     mockLocalImageResponses("seed-prompt-2");
 
-    const workflow = {
-      "4": { inputs: { seed: 0 } },
-      "6": { inputs: { text: "" } },
-      "9": { inputs: {} },
-    };
+    const originalWorkflow = workflow("", { "4": { inputs: { seed: 0 } } });
     const cfg = buildComfyConfig(
       testWorkflowConfig({
-        workflow: structuredClone(workflow),
+        workflow: structuredClone(originalWorkflow),
         seedNodeId: "4",
-        seedInputName,
+        seedInputName: "noise_seed",
       }),
     );
 
@@ -301,26 +256,20 @@ describe("comfy image-generation provider", () => {
     expect(parseJsonBody(4)).toMatchObject({
       prompt: { "4": { inputs: { noise_seed: 2 ** 48 - 2 } } },
     });
-    expect(cfg.plugins?.entries?.comfy?.config?.workflow).toEqual(workflow);
+    expect(cfg.plugins?.entries?.comfy?.config?.workflow).toEqual(originalWorkflow);
   });
 
   it.each([
-    { host: "comfyui", mode: "cloud", allowed: false, privateNetwork: false },
-    { host: "images.example.com", mode: "local", allowed: false, privateNetwork: false },
-    {
-      host: "comfy.private.example.com",
-      mode: "local",
-      allowed: false,
-      privateNetwork: true,
-      address: "169.254.169.254",
-    },
-    { host: "comfyui", mode: "local", allowed: true, privateNetwork: false },
-    { host: "comfy.private.example.com", mode: "local", allowed: true, privateNetwork: true },
-  ])(
-    "$mode $host private=$privateNetwork allowed=$allowed",
-    async ({ host, mode, allowed, privateNetwork, address }) => {
+    ["comfyui", "cloud", false, false, "10.0.0.25"],
+    ["images.example.com", "local", false, false, "10.0.0.25"],
+    ["comfy.private.example.com", "local", false, true, "169.254.169.254"],
+    ["comfyui", "local", true, false, "10.0.0.25"],
+    ["comfy.private.example.com", "local", true, true, "10.0.0.25"],
+  ] as const)(
+    "%s %s allowed=%s private=%s address=%s",
+    async (host, mode, allowed, privateNetwork, address) => {
       const baseUrl = `http://${host}:8188`;
-      const harness = installRealComfyFetchGuard({ dns: { [host]: address ?? "10.0.0.25" } });
+      const harness = installRealComfyFetchGuard({ dns: { [host]: address } });
       const result = generateImage({
         baseUrl,
         mode,
@@ -331,15 +280,15 @@ describe("comfy image-generation provider", () => {
       if (allowed) {
         expect((await result).images[0]?.buffer).toEqual(Buffer.from("png-data"));
         expect(harness.fetchUrls).toContain(submitUrl);
-        expect(harness.guardCalls).toHaveLength(3);
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
       } else {
         await expect(result).rejects.toThrow(
           "Blocked: resolves to private/internal/special-use IP address",
         );
         expect(harness.fetchUrls).toEqual([]);
-        expect(harness.guardCalls).toHaveLength(1);
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
       }
-      expect(harness.guardCalls[0]?.url).toBe(submitUrl);
+      expect(fetchRequest(1).url).toBe(submitUrl);
     },
   );
 
@@ -390,7 +339,7 @@ describe("comfy image-generation provider", () => {
 
     expect(harness.fetchUrls).toContain(`${privateOrigin}/api/prompt`);
     expect(harness.fetchUrls).toContain("https://cdn.example.com/generated.png");
-    expect(harness.guardCalls).toHaveLength(4);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(4);
     expect(result.images[0]?.buffer).toEqual(Buffer.from("cdn-data"));
   });
 
@@ -416,10 +365,7 @@ describe("comfy image-generation provider", () => {
   });
 
   it("keeps generated image downloads above the configured media cap", async () => {
-    mockLocalImageResponses("local-prompt-1", {
-      body: Buffer.from("over-cap"),
-      contentType: "image/png",
-    });
+    mockLocalImageResponses("local-prompt-1", "over-cap");
 
     const result = await generateImage({}, "draw a lobster", {
       cfg: {
@@ -432,13 +378,8 @@ describe("comfy image-generation provider", () => {
 
   it("reports malformed local workflow submit JSON as a provider error", async () => {
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response("{ nope", {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-      release,
-    });
+    const { response } = fetchGuardResponse("{ nope", "application/json");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
 
     await expect(generateImage()).rejects.toThrow(
       "Comfy workflow submit failed: malformed JSON response",
@@ -463,19 +404,11 @@ describe("comfy image-generation provider", () => {
 
   it("uploads reference images for local edit workflows", async () => {
     fetchWithSsrFGuardMock.mockResolvedValueOnce(fetchGuardJson({ name: "upload.png" }));
-    mockLocalImageResponses(
-      "local-edit-1",
-      { body: Buffer.from("edited-data"), contentType: "image/png" },
-      "edited.png",
-    );
+    mockLocalImageResponses("local-edit-1", "edited-data", "edited.png");
 
     await generateImage(
       {
-        workflow: {
-          "6": { inputs: { text: "" } },
-          "7": { inputs: { image: "" } },
-          "9": { inputs: {} },
-        },
+        workflow: workflow("", { "7": { inputs: { image: "" } } }),
         inputImageNodeId: "7",
       },
       "turn this into a poster",
@@ -496,15 +429,9 @@ describe("comfy image-generation provider", () => {
     if (!(uploadForm instanceof FormData)) {
       throw new Error("expected Comfy upload request body to be FormData");
     }
-    expect(uploadForm.get("type")).toBe("input");
-    expect(uploadForm.get("overwrite")).toBe("true");
-
+    expect([uploadForm.get("type"), uploadForm.get("overwrite")]).toEqual(["input", "true"]);
     expect(parseJsonBody(2)).toEqual({
-      prompt: {
-        "6": { inputs: { text: "turn this into a poster" } },
-        "7": { inputs: { image: "upload.png" } },
-        "9": { inputs: {} },
-      },
+      prompt: workflow("turn this into a poster", { "7": { inputs: { image: "upload.png" } } }),
     });
   });
 
@@ -529,13 +456,8 @@ describe("comfy image-generation provider", () => {
     const submitHeaders = new Headers(submitRequest?.init?.headers);
     expect(submitHeaders.get("x-api-key")).toBe("profile-key");
     expect(parseJsonBody(1)).toEqual({
-      prompt: {
-        "6": { inputs: { text: "cloud workflow prompt" } },
-        "9": { inputs: {} },
-      },
-      extra_data: {
-        api_key_comfy_org: "profile-key",
-      },
+      prompt: workflow("cloud workflow prompt"),
+      extra_data: { api_key_comfy_org: "profile-key" },
     });
 
     expect([2, 3, 4].map(fetchRequest)).toMatchObject([
@@ -547,9 +469,6 @@ describe("comfy image-generation provider", () => {
       },
     ]);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(4);
-    expect(result.metadata).toEqual({
-      promptId: "cloud-job-1",
-      outputNodeIds: ["9"],
-    });
+    expect(result.metadata).toEqual({ promptId: "cloud-job-1", outputNodeIds: ["9"] });
   });
 });
