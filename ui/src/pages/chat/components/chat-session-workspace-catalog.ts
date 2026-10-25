@@ -165,7 +165,7 @@ export function workspaceCatalogFilters(
 }
 
 export function workspaceCatalogChildren(
-  catalog: ReturnType<typeof projectWorkspaceCatalog>,
+  catalog: { project: ReadonlyMap<string, WorkspaceCatalogRow> },
   filter: SessionWorkspaceFilter,
 ): ReadonlyMap<string, readonly WorkspaceCatalogRow[]> {
   const children = new Map<string, WorkspaceCatalogRow[]>();

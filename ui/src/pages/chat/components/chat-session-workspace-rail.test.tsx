@@ -593,6 +593,14 @@ it("desktop browses lazy directories and restores activity after global search c
     sessionWorkspaceForHost(state).publish();
     await vi.waitFor(() => expect(button(mounted.container, "docs/refreshed.md")).not.toBeNull());
     expect(button(mounted.container, "docs/untouched.md")).toBeNull();
+    directory.browser = {
+      ...directory.browser,
+      entries: [{ path: "docs/refreshed.md", name: "renamed.md", kind: "file" }],
+    };
+    sessionWorkspaceForHost(state).publish();
+    await vi.waitFor(() =>
+      expect(button(mounted.container, "docs/refreshed.md")?.textContent).toContain("renamed.md"),
+    );
     props().onSetFilter("changed");
     flush();
     button(mounted.container, "Search files")!.click();
