@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { createComponent, createSignal, flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -13,23 +13,31 @@ import { createWaitingNodePairSetup } from "../../test-helpers/devices-fixtures.
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { DevicePairSetup } from "./view-pairing.tsx";
+import { DevicePairSetup, type DevicePairSetupProps } from "./view-pairing.tsx";
 
-function renderPairing(lifecycle: DevicePairSetupLifecycle, nowMs = 0) {
-  return mountSolid(() =>
-    createComponent(DevicePairSetup, {
-      open: true,
-      lifecycle,
-      nowMs,
-      pendingCount: 0,
-      onRefresh: vi.fn(async () => {}),
-      onAccessChange: vi.fn(),
-      onClose: vi.fn(),
-      onManageDevices: vi.fn(),
-      onGetApps: vi.fn(),
-    }),
-  ).container;
+function Pairing(props: Partial<DevicePairSetupProps> & Pick<DevicePairSetupProps, "lifecycle">) {
+  return (
+    <DevicePairSetup
+      open={true}
+      nowMs={0}
+      pendingCount={0}
+      onRefresh={vi.fn(async () => {})}
+      onAccessChange={vi.fn()}
+      onClose={vi.fn()}
+      onManageDevices={vi.fn()}
+      onGetApps={vi.fn()}
+      {...props}
+    />
+  );
 }
+
+const renderPairing = (lifecycle: DevicePairSetupLifecycle, nowMs = 0) =>
+  mountSolid(() => <Pairing lifecycle={lifecycle} nowMs={nowMs} />).container;
+type PairingView = ReturnType<typeof mountSolid>;
+const expectLoading = (view: PairingView) =>
+  expect(view.container.querySelector(".device-pair-setup__loading")).not.toBeNull();
+const expectEnabled = (view: PairingView, name = "Create setup code") =>
+  expect(view.getByRole("button", { name }).hasAttribute("disabled")).toBe(false);
 
 function renderOwnedPairing(
   request: Parameters<typeof createTestGatewayClient>[0],
@@ -43,30 +51,26 @@ function renderOwnedPairing(
   state.devicePairSetupLifecycle = lifecycle;
   let publish = () => {};
   const operations: Promise<void>[] = [];
+  const onRefresh = async () => {
+    const operation = refreshDevicePairSetup(state);
+    operations.push(operation);
+    publish();
+    await operation;
+    publish();
+  };
   const mounted = mountSolid(() => {
     const [snapshot, setSnapshot] = createSignal(readDevicePairSetupSnapshot(state));
     publish = () => setSnapshot(readDevicePairSetupSnapshot(state));
     state.onDevicePairSetupChange = publish;
     return (
-      <DevicePairSetup
+      <Pairing
         open={snapshot().devicePairSetupOpen}
         lifecycle={snapshot().devicePairSetupLifecycle}
-        nowMs={0}
-        pendingCount={0}
-        onRefresh={async () => {
-          const operation = refreshDevicePairSetup(state);
-          operations.push(operation);
-          publish();
-          await operation;
-          publish();
-        }}
-        onAccessChange={vi.fn()}
+        onRefresh={onRefresh}
         onClose={() => {
           closeDevicePairSetup(state);
           publish();
         }}
-        onManageDevices={vi.fn()}
-        onGetApps={vi.fn()}
       />
     );
   });
@@ -89,7 +93,7 @@ describe("device pairing dialog", () => {
     });
     view.getByRole("button", { name: "Reload" }).click();
     await waitForSolid(() => {
-      expect(view.container.querySelector(".device-pair-setup__loading")).not.toBeNull();
+      expectLoading(view);
       expect(view.queryByRole("alert")).toBeNull();
     });
     expect(request).toHaveBeenCalledOnce();
@@ -99,19 +103,13 @@ describe("device pairing dialog", () => {
     await waitForSolid(() => expect(view.container.querySelector(".device-pair-setup")).toBeNull());
     view.state.devicePairSetupOpen = true;
     view.publish();
-    await waitForSolid(() =>
-      expect(view.getByRole("button", { name: "Create setup code" }).hasAttribute("disabled")).toBe(
-        false,
-      ),
-    );
+    await waitForSolid(() => expectEnabled(view));
     status.resolve({
       completion: { setupId: "old-setup", access: "full", deviceName: "Retired phone" },
     });
     await Promise.all(view.operations);
     await waitForSolid(() => {
-      expect(view.getByRole("button", { name: "Create setup code" }).hasAttribute("disabled")).toBe(
-        false,
-      );
+      expectEnabled(view);
       expect(view.queryByText("Retired phone")).toBeNull();
     });
   });
@@ -122,17 +120,13 @@ describe("device pairing dialog", () => {
     const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     const view = renderOwnedPairing(request);
     view.getByRole("button", { name: "Create setup code" }).click();
-    await waitForSolid(() =>
-      expect(view.container.querySelector(".device-pair-setup__loading")).not.toBeNull(),
-    );
+    await waitForSolid(() => expectLoading(view));
     first.reject(new Error("Synthetic create failure"));
     await waitForSolid(() =>
       expect(view.getByRole("alert").textContent).toContain("Synthetic create failure"),
     );
     view.getByRole("button", { name: "Reload" }).click();
-    await waitForSolid(() =>
-      expect(view.container.querySelector(".device-pair-setup__loading")).not.toBeNull(),
-    );
+    await waitForSolid(() => expectLoading(view));
     second.resolve({
       setupId: "new-setup",
       setupCode: "SYNTHETIC",
@@ -141,9 +135,7 @@ describe("device pairing dialog", () => {
       auth: "token",
       urlSource: "test",
     });
-    await waitForSolid(() =>
-      expect(view.getByRole("button", { name: "New code" }).hasAttribute("disabled")).toBe(false),
-    );
+    await waitForSolid(() => expectEnabled(view, "New code"));
     expect(request).toHaveBeenCalledTimes(2);
     expect(view.queryByRole("alert")).toBeNull();
   });
@@ -219,22 +211,18 @@ describe("device pairing dialog", () => {
   });
 
   it("announces device requests that arrive while the setup code is shown", () => {
-    const [pendingCount, setPendingCount] = createSignal(0);
-    const view = mountSolid(() =>
-      createComponent(DevicePairSetup, {
-        open: true,
-        lifecycle: createWaitingNodePairSetup(),
-        nowMs: 10_000,
-        get pendingCount() {
-          return pendingCount();
-        },
-        onRefresh: vi.fn(async () => {}),
-        onAccessChange: vi.fn(),
-        onClose: vi.fn(),
-        onManageDevices: vi.fn(),
-        onGetApps: vi.fn(),
-      }),
-    );
+    let setPendingCount!: (count: number) => void;
+    const view = mountSolid(() => {
+      const [pendingCount, setCount] = createSignal(0);
+      setPendingCount = setCount;
+      return (
+        <Pairing
+          lifecycle={createWaitingNodePairSetup()}
+          nowMs={10_000}
+          pendingCount={pendingCount()}
+        />
+      );
+    });
 
     const waiting = "Run the command on the device, then review its pairing request here.";
     const status = view.getByRole("status");
