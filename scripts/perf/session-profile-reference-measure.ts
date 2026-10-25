@@ -43,18 +43,27 @@ const startAt = parseStrictIntegerOption({
 const stateDir = await mkdtemp(path.join(tmpdir(), "session-profile-reference-"));
 process.env.OPENCLAW_STATE_DIR = stateDir;
 
-const [registry, filters, targets, contexts, selections, profiles, database, identity, list] =
-  await Promise.all([
-    import("../../src/agents/subagents/registry/subagent-registry-state.js"),
-    import("../../src/gateway/session-list-filters.js"),
-    import("../../src/gateway/session-list-target.js"),
-    import("../../src/gateway/session-row-projection-context.js"),
-    import("../../src/gateway/session-row-selection.js"),
-    import("../../src/state/user-profile-list.js"),
-    import("../../src/state/openclaw-state-db.js"),
-    import("../../src/gateway/session-identity-projection.js"),
-    import("../../src/gateway/session-utils-list.js"),
-  ]);
+const [
+  registry,
+  filters,
+  targets,
+  contexts,
+  selections,
+  profiles,
+  database,
+  identity,
+  sessionLists,
+] = await Promise.all([
+  import("../../src/agents/subagents/registry/subagent-registry-state.js"),
+  import("../../src/gateway/session-list-filters.js"),
+  import("../../src/gateway/session-list-target.js"),
+  import("../../src/gateway/session-row-projection-context.js"),
+  import("../../src/gateway/session-row-selection.js"),
+  import("../../src/state/user-profile-list.js"),
+  import("../../src/state/openclaw-state-db.js"),
+  import("../../src/gateway/session-identity-projection.js"),
+  import("../../src/gateway/session-utils-list.js"),
+]);
 const inspector = new Session();
 let owner: ReturnType<typeof contexts.createSessionRowProjectionContext> | undefined;
 let catalog: Awaited<ReturnType<typeof profiles.prepareUserProfileCatalog>> | undefined;
@@ -290,7 +299,7 @@ try {
       return { entries: [], totalCount: 0, involvingProfileId: resolved?.value };
     }
     return values.selection
-      ? list.selectSessionEntries({ ...params, opts: { ...params.opts, limit: 25 } })
+      ? sessionLists.selectSessionEntries({ ...params, opts: { ...params.opts, limit: 25 } })
       : filters.filterSessionEntries(params, page);
   };
   const capture = () =>
