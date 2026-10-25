@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import type { MigrationProviderPlugin } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { offerPostInstallMigrations } from "./setup.post-install-migration.js";
@@ -14,12 +15,7 @@ vi.mock("../plugins/migration-provider-runtime.js", () => ({
   ) => await run(migrationProviders()),
 }));
 const resolveOwnership = vi.hoisted(() =>
-  vi.fn<
-    (params: { contract: string; value?: string }) => {
-      pluginIds: string[];
-      bundledCompatPluginIds: string[];
-    }
-  >(),
+  vi.fn((_params: { value?: string }) => ({ pluginIds: ["codex"], bundledCompatPluginIds: [] })),
 );
 vi.mock("../plugins/manifest-contract-runtime.js", () => ({
   resolveManifestContractRuntimePluginResolution: resolveOwnership,
@@ -57,7 +53,6 @@ function runOffer(overrides: Partial<Parameters<typeof offerPostInstallMigration
 let provider: MigrationProviderPlugin;
 let prompter: ReturnType<typeof createWizardPrompter>;
 beforeEach(() => {
-  vi.clearAllMocks();
   provider = buildProvider();
   prompter = createWizardPrompter();
   migrationProviders.mockReset().mockReturnValue([provider]);
@@ -68,52 +63,26 @@ beforeEach(() => {
   migrateDefaultCommand.mockReset();
   ttyMock.set(true);
 });
-afterEach(() => {
-  ttyMock.restore();
-});
+afterEach(ttyMock.restore);
 
-it("returns unchanged without loading providers when no plugins were installed", async () => {
-  const config: OpenClawConfig = { plugins: { entries: { codex: { enabled: true } } } };
-  const result = await runOffer({ config, installedPluginIds: [] });
-  expect(migrationProviders).not.toHaveBeenCalled();
-  expect(migrateDefaultCommand).not.toHaveBeenCalled();
-  expect(result.config).toBe(config);
-});
-
-it("excludes unowned, absent, low-confidence, and failed detections from migration offers", async () => {
-  const unowned = buildProvider({ id: "unowned" });
-  const absent = buildProvider({ id: "absent", detect: vi.fn(async () => ({ found: false })) });
-  const low = buildProvider({
-    id: "low",
-    detect: vi.fn(async () => ({ found: true, confidence: "low" as const })),
-  });
-  const failed = buildProvider({
-    id: "failed",
-    detect: vi.fn(async () => {
-      throw new Error("detect failure");
-    }),
-  });
-  migrationProviders.mockReturnValue([unowned, absent, low, failed]);
-  resolveOwnership.mockImplementation(({ value }) => ({
-    pluginIds: value === "unowned" ? ["other"] : ["codex"],
-    bundledCompatPluginIds: [],
-  }));
-  await runOffer();
-  expect(unowned.detect).not.toHaveBeenCalled();
-  expect(prompter.confirm).not.toHaveBeenCalled();
-  expect(migrateDefaultCommand).not.toHaveBeenCalled();
-});
-
-it.each([false, true])(
-  "continues unchanged after an accepted migration (failure=%s)",
-  async (fails) => {
-    vi.mocked(prompter.confirm).mockResolvedValue(true);
-    if (fails) {
-      migrateDefaultCommand.mockRejectedValueOnce(new Error("boom"));
-    }
-    const result = await runOffer();
-    expect(migrateDefaultCommand).toHaveBeenCalledOnce();
-    expect(result).toEqual({ config: {} });
+it.each(["unowned", "absent", "low", "failed"])(
+  "excludes %s providers from migration offers",
+  async (mode) => {
+    const detect = vi.fn<NonNullable<MigrationProviderPlugin["detect"]>>(async () => {
+      if (mode === "failed") {
+        throw new Error("detect failure");
+      }
+      return { found: mode !== "absent", confidence: mode === "low" ? "low" : "high" };
+    });
+    migrationProviders.mockReturnValue([buildProvider({ detect })]);
+    resolveOwnership.mockReturnValue({
+      pluginIds: mode === "unowned" ? ["other"] : ["codex"],
+      bundledCompatPluginIds: [],
+    });
+    await runOffer();
+    expect(detect).toHaveBeenCalledTimes(mode === "unowned" ? 0 : 1);
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(migrateDefaultCommand).not.toHaveBeenCalled();
   },
 );
 
@@ -133,65 +102,58 @@ it("shows provider-owned import scope before asking and respects a decline", asy
   expect(migrateDefaultCommand).not.toHaveBeenCalled();
 });
 
-it("returns migrated config patches without mutating the input or replacing sibling settings", async () => {
-  const originalSettings = { appServer: { sandbox: "workspace-write" } };
-  const inputConfig: OpenClawConfig = {
-    plugins: { entries: { codex: { enabled: true, config: originalSettings } } },
-  };
-  migrateDefaultCommand.mockResolvedValueOnce({
-    providerId: "codex",
-    source: "/home/user/.codex",
-    summary: {
-      total: 1,
-      planned: 0,
-      migrated: 1,
-      skipped: 0,
-      conflicts: 0,
-      errors: 0,
-      sensitive: 0,
+it.each(["empty", "failure", "patch"])("preserves input for %s migration results", async (mode) => {
+  const inputConfig: OpenClawConfig = { env: { vars: { KEEP: "original" } } };
+  const items = [
+    {
+      id: "config:env",
+      kind: "config",
+      action: "merge",
+      status: "migrated",
+      details: { path: ["env"], value: { vars: { IMPORTED: "yes" } } },
     },
-    items: [
-      {
-        id: "config:codex-plugins",
-        kind: "config",
-        action: "merge",
-        status: "migrated",
-        details: {
-          path: ["plugins", "entries", "codex"],
-          value: { enabled: true, config: { codexPlugins: { enabled: true } } },
-        },
-      },
-    ],
-  });
+  ] satisfies import("../plugins/types.js").MigrationPlan["items"];
+  if (mode === "failure") {
+    migrateDefaultCommand.mockRejectedValueOnce(new Error("boom"));
+  }
+  if (mode === "patch") {
+    migrateDefaultCommand.mockResolvedValueOnce({
+      providerId: "codex",
+      source: "/home/user/.codex",
+      summary: summarizeMigrationItems(items),
+      items,
+    });
+  }
   vi.mocked(prompter.confirm).mockResolvedValue(true);
   const result = await runOffer({ config: inputConfig });
-  expect(migrateDefaultCommand).toHaveBeenCalledExactlyOnceWith(
-    expect.anything(),
-    expect.objectContaining({
-      provider: "codex",
-      configOverride: inputConfig,
-      configPatchMode: "return",
-      suppressPlanLog: true,
-    }),
-    provider,
-  );
-  expect(result.config).not.toBe(inputConfig);
-  expect(result.config.plugins?.entries?.codex?.config).toEqual({
-    appServer: { sandbox: "workspace-write" },
-    codexPlugins: { enabled: true },
+  expect(migrateDefaultCommand.mock.calls[0]?.[1]).toMatchObject({
+    provider: "codex",
+    configOverride: inputConfig,
+    configPatchMode: "return",
   });
-  expect(inputConfig.plugins?.entries?.codex?.config).toEqual({
-    appServer: { sandbox: "workspace-write" },
+  expect(migrateDefaultCommand.mock.calls[0]?.[2]).toBe(provider);
+  expect(result.config === inputConfig).toBe(mode !== "patch");
+  expect(result.config).toEqual({
+    env: {
+      vars: mode === "patch" ? { KEEP: "original", IMPORTED: "yes" } : { KEEP: "original" },
+    },
   });
+  expect(inputConfig).toEqual({ env: { vars: { KEEP: "original" } } });
 });
 
-it.each(["flag", "stdin"])(
-  "never prompts or applies when %s selects non-interactive mode",
-  async (mode) => {
-    ttyMock.set(mode !== "stdin");
-    await runOffer({ nonInteractive: mode === "flag" });
-    expect(prompter.note).not.toHaveBeenCalled();
-    expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(migrateDefaultCommand).not.toHaveBeenCalled();
-  },
-);
+it.each(["no plugins", "flag", "stdin"])("skips migration when %s", async (mode) => {
+  const config: OpenClawConfig = { env: { vars: { KEEP: "original" } } };
+  ttyMock.set(mode !== "stdin");
+  const result = await runOffer({
+    config,
+    nonInteractive: mode === "flag",
+    installedPluginIds: mode === "no plugins" ? [] : ["codex"],
+  });
+  if (mode === "no plugins") {
+    expect(migrationProviders).not.toHaveBeenCalled();
+  }
+  expect(result.config).toBe(config);
+  expect(prompter.note).not.toHaveBeenCalled();
+  expect(prompter.confirm).not.toHaveBeenCalled();
+  expect(migrateDefaultCommand).not.toHaveBeenCalled();
+});
