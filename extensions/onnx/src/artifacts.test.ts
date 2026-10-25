@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -24,6 +25,7 @@ const model: ModelPreset = {
   maxTokens: 512,
   source: { kind: "hub", repository: "example/model", revision: "a".repeat(40), files: [file] },
 };
+const local: ModelPreset = { ...model, source: { ...model.source, kind: "local-export" } };
 
 function mockDownload(body: BodyInit, onRelease = async () => {}) {
   const response = new Response(body);
@@ -168,7 +170,7 @@ it.skipIf(process.platform === "win32").each([
   // Rescue a regressed blocking open with EOF, so it fails instead of hanging the worker.
   const rescue = setTimeout(() => {
     neededWriter = true;
-    const child = spawn(
+    writer = spawn(
       process.execPath,
       [
         "-e",
@@ -177,20 +179,10 @@ it.skipIf(process.platform === "win32").each([
       ],
       { stdio: "ignore" },
     );
-    writer = child;
-    writerExited = new Promise<void>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", () => resolve());
-    });
+    writerExited = once(writer, "close").then(() => {});
   }, 1000);
   try {
-    const operation =
-      filename === "model.json"
-        ? resolveModelFiles(root, {
-            ...model,
-            source: { ...model.source, kind: "local-export" },
-          })
-        : verify();
+    const operation = filename === "model.json" ? resolveModelFiles(root, local) : verify();
     await expect(operation).rejects.toThrow("model-integrity");
     expect(neededWriter, "the regular-file refusal must not need an EOF writer").toBe(false);
     expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
@@ -233,7 +225,6 @@ it.each(["grows", "shrinks", "close fails"])("rejects when the artifact %s", asy
 });
 
 it("rejects local-export path traversal and mismatched source identity", async () => {
-  const local: ModelPreset = { ...model, source: { ...model.source, kind: "local-export" } };
   const manifestPath = path.join(destination, "model.json");
   const exportedFiles = [
     { name: "model.onnx", bytes: 1, sha256: "a".repeat(64) },
