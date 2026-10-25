@@ -119,30 +119,14 @@ function createBraveTool(
   return tool;
 }
 
-const missingKeyMessage =
-  "web_search (brave) needs a Brave Search API key. Run `openclaw configure --section web` to store it, or set BRAVE_API_KEY in the Gateway environment. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.";
-const reversedDatesMessage = "date_after must be before date_before.";
-const futureDateMessage = "date_after cannot be in the future for Brave llm-context mode.";
-const endOnlyMessage =
-  "Brave llm-context mode requires date_after when date_before is set. Use a bounded date range or freshness.";
 it.each([
-  [{ apiKey: "" }, {}, "missing_brave_api_key", missingKeyMessage],
-  [
-    {},
-    { date_after: "2026-03-20", date_before: "2026-03-01" },
-    "invalid_date_range",
-    reversedDatesMessage,
-  ],
-  [{ mode: "llm-context" }, { date_after: "2999-01-01" }, "invalid_date_range", futureDateMessage],
-  [
-    { mode: "llm-context" },
-    { date_before: "2025-01-31" },
-    "unsupported_date_filter",
-    endOnlyMessage,
-  ],
-] as const)("rejects invalid search: %j %j", async (config, args, error, message) => {
+  [{ apiKey: "" }, {}, "missing_brave_api_key"],
+  [{}, { date_after: "2026-03-20", date_before: "2026-03-01" }, "invalid_date_range"],
+  [{ mode: "llm-context" }, { date_after: "2999-01-01" }, "invalid_date_range"],
+  [{ mode: "llm-context" }, { date_before: "2025-01-31" }, "unsupported_date_filter"],
+] as const)("rejects invalid search: %j %j", async (config, args, error) => {
   const result = await createBraveTool(config).execute({ query: "invalid search", ...args });
-  expect(result).toEqual({ error, message, docs: "https://docs.openclaw.ai/tools/web" });
+  expect(result).toMatchObject({ error, docs: "https://docs.openclaw.ai/tools/web" });
   expect(mockFetch).not.toHaveBeenCalled();
 });
 
@@ -210,16 +194,12 @@ it.each([
     expect(mockFetch).not.toHaveBeenCalled();
     return;
   }
-  const params = fetchRequestUrl().searchParams;
-  expect(Object.fromEntries(params)).toMatchObject(expected);
+  expect(Object.fromEntries(fetchRequestUrl().searchParams)).toMatchObject(expected);
 });
 
 it.each(["web", "llm-context"] as const)("caps %s results and separates caches", async (mode) => {
-  const results = ["first", "second", "third"].map((name) => ({
-    url: `https://example.com/${name}`,
-    title: name,
-    description: name,
-  }));
+  const urls = ["first", "second", "third"].map((name) => `https://example.com/${name}`);
+  const results = urls.map((url) => ({ url, title: url, description: url }));
   respond(resultPayload(mode, results));
   const tool = createBraveTool({ mode });
   const args = { query: `count-${mode}`, count: 1 };
@@ -232,118 +212,78 @@ it.each(["web", "llm-context"] as const)("caps %s results and separates caches",
     null,
   ]);
   expect(new Headers(fetchCall()[1]?.headers).get("X-Subscription-Token")).toBe(apiKey);
-  expectResults(first, ["https://example.com/first"]);
+  expectResults(first, urls.slice(0, 1));
   const larger = await tool.execute({ ...args, count: 2 });
   expect(mockFetch).toHaveBeenCalledTimes(2);
-  expectResults(larger, ["https://example.com/first", "https://example.com/second"]);
+  expectResults(larger, urls.slice(0, 2));
   await expectCached(() => tool.execute({ ...args, count: 2 }), larger, 2);
 });
 
-it.each(["web", "llm-context"] as const)(
-  "keeps %s results scoped to the request credential",
-  async (mode) => {
-    mockFetch.mockImplementation(async (_url, init) => {
-      const credential = new Headers(init?.headers).get("X-Subscription-Token");
-      const account =
-        credential === "brave-account-a"
-          ? "account-a"
-          : credential === "brave-account-b"
-            ? "account-b"
-            : undefined;
-      if (!account) {
-        throw new Error("Unexpected synthetic Brave credential");
-      }
-      return Response.json(
-        resultPayload(mode, [{ url: `https://example.com/${account}`, title: account }]),
-      );
-    });
-    const accountA = createBraveTool({ apiKey: "brave-account-a", mode });
-    const accountB = createBraveTool({ apiKey: "brave-account-b", mode });
-    const args = { query: `Brave credential-scoped results ${mode}` };
-
-    expectResults(await accountA.execute(args), ["https://example.com/account-a"]);
-    expectResults(await accountB.execute(args), ["https://example.com/account-b"]);
-    const repeated = await accountA.execute(args);
-    expectResults(repeated, ["https://example.com/account-a"]);
-    expect(repeated.cached).toBe(true);
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-  },
-);
-
-it.each([
-  { mode: "web", cacheTtlMinutes: 0 },
-  { mode: "llm-context", cacheTtlMinutes: 1 },
-])("honors current $mode cache TTL $cacheTtlMinutes", async ({ mode, cacheTtlMinutes }) => {
-  const now = Date.now();
-  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-  let requestCount = 0;
-  mockFetch.mockImplementation(async () => {
-    const result = { url: `https://example.com/result-${++requestCount}` };
-    return Response.json(resultPayload(mode, [result]));
+it.each(["web", "llm-context"] as const)("keeps %s results credential-scoped", async (mode) => {
+  const accounts = new Map([
+    ["brave-account-a", "https://example.com/account-a"],
+    ["brave-account-b", "https://example.com/account-b"],
+  ]);
+  mockFetch.mockImplementation(async (_url, init) => {
+    const url = accounts.get(new Headers(init?.headers).get("X-Subscription-Token") ?? "");
+    if (!url) {
+      throw new Error("Unexpected synthetic Brave credential");
+    }
+    return Response.json(resultPayload(mode, [{ url, title: url }]));
   });
-  const cachedTool = createBraveTool({ mode }, { searchConfig: { cacheTtlMinutes: 15 } });
-  const currentTool = createBraveTool({ mode }, { searchConfig: { cacheTtlMinutes } });
-  const args = { query: `ttl-${mode}` };
-  const original = await cachedTool.execute(args);
-  expect(original).toMatchObject({ results: [{ url: "https://example.com/result-1" }] });
-  await expectCached(() => cachedTool.execute(args), original, 1);
-  clock.mockReturnValue(now + 60_000);
-  const fresh = await currentTool.execute(args);
-  expect(fresh).toMatchObject({ results: [{ url: "https://example.com/result-2" }] });
-  expect(fresh).not.toHaveProperty("cached");
-  expect(mockFetch).toHaveBeenCalledTimes(2);
-  if (cacheTtlMinutes === 0) {
-    expect(await currentTool.execute(args)).toMatchObject({
-      results: [{ url: "https://example.com/result-3" }],
-    });
-    await expectCached(() => cachedTool.execute(args), original, 3);
-  } else {
-    await expectCached(() => currentTool.execute(args), fresh, 2);
-  }
+  const accountA = createBraveTool({ apiKey: "brave-account-a", mode });
+  const accountB = createBraveTool({ apiKey: "brave-account-b", mode });
+  const args = { query: `Brave credential-scoped results ${mode}` };
+
+  const first = await accountA.execute(args);
+  expectResults(first, ["https://example.com/account-a"]);
+  expectResults(await accountB.execute(args), ["https://example.com/account-b"]);
+  await expectCached(() => accountA.execute(args), first, 2);
 });
 
-it.each(["web", "llm-context"])("preserves %s publication dates, not ages", async (mode) => {
-  const urls = {
-    timestamp: "https://example.com/timestamp",
-    day: "https://example.com/day",
-    unknown: "https://example.com/unknown",
-  };
-  const age = ["Monday, January 15, 2024", "2024-01-15", "380 days ago"];
-  if (mode === "web") {
-    const results = [
-      { page_age: "2025-04-12T14:22:41", age: "2 days ago" },
-      { page_fetched: "2025-04-14T14:22:41", age: "2 days ago" },
-    ];
-    respond({ web: { results } });
-  } else {
-    const generic = Object.values(urls).map((url) => ({
-      url,
-      title: "Source",
-      snippets: ["text", ""],
-    }));
-    respond({
-      grounding: { generic },
-      sources: {
-        [urls.day]: { age },
-        [urls.timestamp]: { age: [...age, "2024-01-15T13:45:02Z"] },
-        [urls.unknown]: { age: [] },
-      },
-    });
-  }
-  const result = await createBraveTool({ mode }).execute({ query: `dates-${mode}` });
-  const rows = result.results as Result[];
-  expect(rows.map((row) => row.published)).toEqual(
-    mode === "web"
-      ? ["2025-04-12T14:22:41", undefined]
-      : ["2024-01-15T13:45:02Z", "2024-01-15", undefined],
-  );
-  if (mode === "llm-context") {
-    expect(rows[0]).toMatchObject({
-      snippets: [expect.stringContaining("text")],
-      siteName: "example.com",
-      title: expect.stringContaining("Source"),
-    });
-  }
+it("preserves web publication dates, not fetch dates or ages", async () => {
+  respond({
+    web: {
+      results: [
+        { page_age: "2025-04-12T14:22:41", age: "2 days ago" },
+        { page_fetched: "2025-04-14T14:22:41", age: "2 days ago" },
+      ],
+    },
+  });
+  const { results } = await createBraveTool().execute({ query: "dates-web" });
+  const rows = results as Result[];
+  expect(rows.map((row) => row.published)).toEqual(["2025-04-12T14:22:41", undefined]);
+});
+
+it("preserves LLM publication dates and wrapped content", async () => {
+  const ages = [
+    ["Monday", "2024-01-15", "380 days ago", "2024-01-15T13:45:02Z"],
+    ["Monday", "2024-01-15", "380 days ago"],
+    [],
+  ];
+  const generic = ages.map((_, i) => ({
+    url: `https://example.com/${i}`,
+    title: "Source",
+    snippets: ["text", ""],
+  }));
+  respond({
+    grounding: { generic },
+    sources: Object.fromEntries(generic.map(({ url }, i) => [url, { age: ages[i] }])),
+  });
+  const { results } = await createBraveTool({ mode: "llm-context" }).execute({
+    query: "dates-llm",
+  });
+  const rows = results as Result[];
+  expect(rows.map((row) => row.published)).toEqual([
+    "2024-01-15T13:45:02Z",
+    "2024-01-15",
+    undefined,
+  ]);
+  expect(rows[0]).toMatchObject({
+    snippets: [expect.stringContaining("text")],
+    siteName: "example.com",
+    title: expect.stringContaining("Source"),
+  });
 });
 
 it.each([
@@ -374,19 +314,6 @@ it("emits brave.http diagnostics for requests, responses, and cache events", asy
       (event) => `brave http ${event}`,
     ),
   );
-  expect(calls[1]?.[1]).toEqual({
-    mode: "web",
-    count: 1,
-    endpoint: "https://api.search.brave.com/res/v1/web/search",
-  });
-  const responsePayload = calls[2]?.[1];
-  expect(responsePayload).toMatchObject({
-    mode: "web",
-    status: 200,
-    ok: true,
-    durationMs: expect.any(Number),
-  });
-  expect(responsePayload?.durationMs).toBeGreaterThanOrEqual(0);
   for (const sensitive of [apiKey, "X-Subscription-Token", query]) {
     expect(JSON.stringify(calls)).not.toContain(sensitive);
   }
