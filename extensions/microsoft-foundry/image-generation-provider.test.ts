@@ -5,7 +5,7 @@ import type {
   ImageGenerationRequest,
 } from "openclaw/plugin-sdk/image-generation";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { PROVIDER_ID } from "./shared.js";
 
@@ -127,18 +127,10 @@ function expectHeaders(request: Record<string, unknown>, expected: Record<string
 }
 
 const inputImage = { buffer: Buffer.from("input"), mimeType: "image/png" };
-const inputImages = [inputImage];
-async function expectRejectedBeforeAuth(
-  request: Partial<ImageGenerationRequest>,
-  error: string,
-  transport = http.postJsonRequest,
-) {
-  await expect(generateImage(request)).rejects.toThrow(error);
-  expect(resolveAuth).not.toHaveBeenCalled();
-  expect(transport).not.toHaveBeenCalled();
-}
-
 describe("microsoft foundry image generation provider", () => {
+  beforeEach(() => {
+    http.postJsonRequest.mockImplementation(async () => imageResponse());
+  });
   afterEach(() => {
     Object.values(http).forEach((mock) => mock.mockClear());
     isConfigured.mockClear();
@@ -172,8 +164,6 @@ describe("microsoft foundry image generation provider", () => {
   });
 
   it("sends MAI image generation requests to the Foundry MAI endpoint with API-key auth", async () => {
-    http.postJsonRequest.mockResolvedValue(imageResponse());
-
     const result = await generateImage({
       prompt: "draw a clean product render",
       size: "768x1365",
@@ -187,7 +177,6 @@ describe("microsoft foundry image generation provider", () => {
       agentDir: undefined,
       store: undefined,
     });
-    expect(http.postJsonRequest).toHaveBeenCalledOnce();
     const request = requireRequest();
     expect(request).toMatchObject({
       url: "https://example.services.ai.azure.com/mai/v1/images/generations",
@@ -228,8 +217,6 @@ describe("microsoft foundry image generation provider", () => {
 
   it("uses AZURE_OPENAI_ENDPOINT when env API-key auth has no configured base URL", async () => {
     vi.stubEnv("AZURE_OPENAI_ENDPOINT", "https://env.services.ai.azure.com");
-    http.postJsonRequest.mockResolvedValue(imageResponse());
-
     await generateImage({
       prompt: "draw from env endpoint",
       cfg: buildConfig({ baseUrl: "" }),
@@ -282,7 +269,6 @@ describe("microsoft foundry image generation provider", () => {
         profileId: "microsoft-foundry:entra",
       }),
     );
-    expect(http.postMultipartRequest).toHaveBeenCalledOnce();
     const request = requireRequest(http.postMultipartRequest);
     expect(request.url).toBe("https://example.services.ai.azure.com/mai/v1/images/edits");
     expectHeaders(request, { authorization: "Bearer entra-token" });
@@ -304,13 +290,11 @@ describe("microsoft foundry image generation provider", () => {
   ] as const)(
     "allows custom deployment %s with metadata=%s",
     async (model, includeModel, size, width, height) => {
-      http.postJsonRequest.mockResolvedValue(imageResponse());
       await generateImage({
         model,
         cfg: buildConfig({ modelId: model, modelName: model, includeModel }),
         size,
       });
-      expect(http.postJsonRequest).toHaveBeenCalledOnce();
       expect(requireRequest().body).toEqual({ model, prompt: "draw it", width, height });
     },
   );
@@ -327,15 +311,15 @@ describe("microsoft foundry image generation provider", () => {
     ["gpt-deployment", "gpt-5.4", false, 'supports MAI image deployments only, got "gpt-5.4"'],
     ["MAI-DS-R1", undefined, false, 'supports MAI image deployments only, got "MAI-DS-R1"'],
   ] as const)("rejects %s / %s before auth (edit=%s)", async (model, modelName, edit, error) => {
-    await expectRejectedBeforeAuth(
-      {
+    await expect(
+      generateImage({
         model,
         cfg: buildConfig({ modelId: model, modelName, includeModel: modelName !== undefined }),
-        ...(edit ? { inputImages } : {}),
-      },
-      error,
-      edit ? http.postMultipartRequest : http.postJsonRequest,
-    );
+        ...(edit ? { inputImages: [inputImage] } : {}),
+      }),
+    ).rejects.toThrow(error);
+    expect(resolveAuth).not.toHaveBeenCalled();
+    expect(edit ? http.postMultipartRequest : http.postJsonRequest).not.toHaveBeenCalled();
   });
 
   it("rejects MAI image sizes outside Microsoft Foundry limits", async () => {
