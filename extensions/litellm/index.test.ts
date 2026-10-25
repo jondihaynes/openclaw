@@ -37,7 +37,7 @@ vi.mock("openclaw/plugin-sdk/provider-setup", async (importOriginal) => {
   };
 });
 
-const LITELLM_DEFAULT_MODEL = {
+const LITELLM_DEFAULT_MODEL: ModelDefinitionConfig = {
   id: "claude-opus-4-6",
   name: "Claude Opus 4.6",
   reasoning: true,
@@ -68,11 +68,8 @@ function providerConfig(
   return { models: { providers, ...(mode ? { mode } : {}) } };
 }
 
-function registerProvider() {
-  const [provider] = capturePluginRegistration(plugin).providers;
-  expect(provider?.id).toBe("litellm");
-  return provider;
-}
+const registerProvider = () =>
+  requireRegisteredProvider(capturePluginRegistration(plugin).providers, "litellm");
 
 async function runInteractiveAuth(params: {
   config?: OpenClawConfig;
@@ -116,58 +113,11 @@ afterEach(() => {
 });
 
 it.each([
-  { authMode: "interactive", modelsMode: "merge" },
-  { authMode: "non-interactive", modelsMode: "replace" },
-] as const)(
-  "preserves an explicit proxy's authored models through registered $authMode auth in $modelsMode mode",
-  async ({ authMode, modelsMode }) => {
-    const authoredModels = [structuredClone(AUTHORED_MODEL)];
-    const config = providerConfig(
-      {
-        litellm: {
-          baseUrl: "https://litellm.example/v1",
-          api: "anthropic-messages",
-          apiKey: "  old-key  ",
-          models: structuredClone(authoredModels),
-        },
-      },
-      modelsMode,
-    );
-    let result: OpenClawConfig | null | undefined;
-    if (authMode === "non-interactive") {
-      result = await runNonInteractiveAuth(config, "old-key", {
-        customBaseUrl: "https://litellm.example/v1/",
-      });
-    } else {
-      const interactive = await runInteractiveAuth({
-        config,
-        key: "old-key",
-        prompter: createTestWizardPrompter(),
-      });
-      expect(interactive?.profiles).toEqual([
-        {
-          profileId: "litellm:default",
-          credential: { type: "api_key", provider: "litellm", key: "old-key" },
-        },
-      ]);
-      result = applyProviderAuthConfigPatch({}, interactive?.configPatch, interactive);
-    }
-    expect(result?.models?.mode).toBe(modelsMode);
-    expect(result?.models?.providers?.litellm).toEqual({
-      baseUrl: "https://litellm.example/v1",
-      api: "openai-completions",
-      apiKey: "old-key",
-      models: [...authoredModels, ...(modelsMode === "replace" ? [LITELLM_DEFAULT_MODEL] : [])],
-    });
-  },
-);
-
-it.each([
   ["https://litellm.example/v1//", "https://litellm.example/v1", undefined],
   ["http://localhost:4000", "http://localhost:4000", undefined],
   ["", "http://localhost:4000", undefined],
   ["  https://litellm.example/v1  ", "https://litellm.example/v1", "https://old.example"],
-  ["http://localhost:4000", "http://localhost:4000", "https://old.example"],
+  ["", "https://old.example", "https://old.example"],
 ] as const)(
   "interactive setup normalizes %j to %j from %j and selects a served model",
   async (answer, expectedBaseUrl, initialValue) => {
@@ -192,17 +142,17 @@ it.each([
 );
 
 it.each([
-  { withCanonical: false, authMode: "interactive" },
-  { withCanonical: true, authMode: "interactive" },
-  { withCanonical: false, authMode: "non-interactive" },
-  { withCanonical: true, authMode: "non-interactive" },
+  [false, "interactive"],
+  [true, "interactive"],
+  [false, "non-interactive"],
+  [true, "non-interactive"],
 ] as const)(
-  "preserves authored settings through $authMode auth with a canonical row present: $withCanonical",
-  async ({ withCanonical, authMode }) => {
+  "preserves authored settings with canonical row %s through %s auth",
+  async (withCanonical, authMode) => {
     const alias: ModelProviderConfig = {
       baseUrl: "https://old.example/v1",
       api: "anthropic-messages",
-      apiKey: "old-key",
+      apiKey: "  old-key  ",
       request: { allowPrivateNetwork: true },
       models: [structuredClone(AUTHORED_MODEL)],
     };
@@ -215,6 +165,7 @@ it.each([
     const selected = withCanonical ? canonical : alias;
     const expectedProvider = {
       ...structuredClone(selected),
+      apiKey: withCanonical ? "canonical-key" : "old-key",
       baseUrl: authMode === "interactive" ? "https://selected.example/v1" : selected.baseUrl,
       api: "openai-completions",
     };
@@ -225,7 +176,21 @@ it.each([
     });
     let providers: Record<string, ModelProviderConfig> | undefined;
     if (authMode === "interactive") {
-      const result = await runInteractiveAuth({ config, prompter });
+      const result = await runInteractiveAuth({
+        config,
+        prompter,
+        key: withCanonical ? "canonical-key" : "old-key",
+      });
+      expect(result?.profiles).toEqual([
+        {
+          profileId: "litellm:default",
+          credential: {
+            type: "api_key",
+            provider: "litellm",
+            key: withCanonical ? "canonical-key" : "old-key",
+          },
+        },
+      ]);
       expect(prompter.text).toHaveBeenCalledWith(
         expect.objectContaining({ initialValue: selected.baseUrl }),
       );
@@ -243,9 +208,9 @@ it.each([
 );
 
 it.each([
-  { answer: "not-a-url", expected: "Enter a full URL, such as http://localhost:4000" },
-  { answer: "ftp://litellm.example", expected: "must start with http:// or https://" },
-])("blocks $answer at the proxy prompt", async ({ answer, expected }) => {
+  ["not-a-url", "Enter a full URL, such as http://localhost:4000"],
+  ["ftp://litellm.example", "must start with http:// or https://"],
+])("blocks %s at the proxy prompt", async (answer, expected) => {
   const prompter = createTestWizardPrompter({
     text: vi.fn(async ({ validate }) => {
       expect(validate).toBeTypeOf("function");
@@ -304,9 +269,25 @@ it.each([
 it.each([
   ["https://litellm.example/v1/", "https://litellm.example/v1", []],
   [undefined, "http://localhost:4000", [LITELLM_DEFAULT_MODEL]],
+  [
+    `${PROXY_URL}/`,
+    PROXY_URL,
+    [AUTHORED_MODEL, LITELLM_DEFAULT_MODEL],
+    providerConfig(
+      {
+        litellm: {
+          baseUrl: PROXY_URL,
+          api: "anthropic-messages",
+          apiKey: "  old-key  ",
+          models: [structuredClone(AUTHORED_MODEL)],
+        },
+      },
+      "replace",
+    ),
+  ],
 ] as const)(
-  "configures proxy URL %j for fresh setup",
-  async (baseUrl, expectedBaseUrl, expectedModels) => {
+  "configures proxy URL %j without losing authored models",
+  async (baseUrl, expectedBaseUrl, expectedModels, config: OpenClawConfig = {}) => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-litellm-auth-"));
     const resolveApiKey = vi.fn(async () => ({
       key: "litellm-test-key",
@@ -319,7 +300,7 @@ it.each([
     }));
     try {
       const result = await runNonInteractiveAuth(
-        {},
+        config,
         "litellm-test-key",
         { litellmApiKey: "litellm-test-key", customBaseUrl: baseUrl },
         { agentDir, resolveApiKey, toApiKeyCredential },
@@ -331,16 +312,19 @@ it.each([
         models: { "litellm/claude-opus-4-6": { alias: "LiteLLM" } },
         model: { primary: "litellm/claude-opus-4-6" },
       });
-      expect(result?.models).toStrictEqual({
-        mode: "merge",
-        providers: {
-          litellm: {
-            baseUrl: expectedBaseUrl,
-            api: "openai-completions",
-            models: expectedModels,
+      expect(result?.models).toStrictEqual(
+        providerConfig(
+          {
+            litellm: {
+              baseUrl: expectedBaseUrl,
+              api: "openai-completions",
+              models: [...expectedModels],
+              ...(config.models ? { apiKey: "old-key" } : {}),
+            },
           },
-        },
-      });
+          config.models?.mode ?? "merge",
+        ).models,
+      );
       expect(resolveApiKey).toHaveBeenCalledWith({
         provider: "litellm",
         flagValue: "litellm-test-key",

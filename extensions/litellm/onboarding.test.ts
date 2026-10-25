@@ -10,6 +10,7 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard
 import { WizardCancelledError } from "openclaw/plugin-sdk/setup";
 import { Agent, EnvHttpProxyAgent, ProxyAgent } from "undici";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { createNoBrowserAuth } from "../test-support/no-browser-auth.test-support.js";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
 
@@ -23,12 +24,16 @@ const servedModel: ModelDefinitionConfig = {
   contextWindow: 32768,
   maxTokens: 2048,
 };
-function unexpectedAuth(): never {
-  throw new Error("Unexpected browser/OAuth auth");
-}
+const authoredProvider = {
+  baseUrl: "http://127.0.0.1:4000/v1",
+  apiKey: "authored-key",
+  request: { allowPrivateNetwork: false, headers: { "X-Proxy-Tenant": "fixture" } },
+  models: [servedModel],
+};
 
 const reply = (body: unknown, status = 200) => Response.json(body, { status });
-function expectModel(config: OpenClawConfig, modelId: string) {
+function expectModel({ result, config }: Awaited<ReturnType<typeof configure>>, modelId: string) {
+  expect(result.defaultModel).toBe(`litellm/${modelId}`);
   expect(config.models?.providers?.litellm?.models.map(({ id }) => id)).toEqual([modelId]);
 }
 function expectDiscoveryKey(key: string) {
@@ -81,8 +86,7 @@ async function configure(
     credentialOnly: params.credentialOnly,
     assertCurrent: params.assertCurrent,
     isRemote: false,
-    openUrl: unexpectedAuth,
-    oauth: { createVpsAwareHandlers: unexpectedAuth },
+    ...createNoBrowserAuth(),
   });
   return { result, config: applyProviderAuthConfigPatch(config, result.configPatch, result) };
 }
@@ -105,16 +109,17 @@ describe("LiteLLM discovery-backed onboarding", () => {
 
   it("defaults to the first served model and saves it without the hosted seed", async () => {
     const prompter = createPrompter({ baseUrl: "http://127.0.0.1:4000" });
-    const { result, config } = await configure({ prompter });
+    const configured = await configure({ prompter });
 
     expectDiscoveryKey("resolved-fixture-key");
     expect(prompter.select).toHaveBeenCalledWith(
       expect.objectContaining({ initialValue: "local-qwen" }),
     );
-    expect(result.defaultModel).toBe("litellm/local-qwen");
-    expect(config.agents?.defaults?.model).toEqual({ primary: "litellm/local-qwen" });
-    expect(config.agents?.defaults?.models).toEqual({ "litellm/local-qwen": { alias: "LiteLLM" } });
-    expectModel(config, "local-qwen");
+    expect(configured.config.agents?.defaults).toEqual({
+      model: { primary: "litellm/local-qwen" },
+      models: { "litellm/local-qwen": { alias: "LiteLLM" } },
+    });
+    expectModel(configured, "local-qwen");
   });
 
   it("preserves a selected proxy alias containing a slash", async () => {
@@ -124,10 +129,7 @@ describe("LiteLLM discovery-backed onboarding", () => {
       assert(option, "Expected proxy alias option");
       return option.value;
     });
-    const { result, config } = await configure({ prompter });
-
-    expect(result.defaultModel).toBe("litellm/team/second-model");
-    expectModel(config, "team/second-model");
+    expectModel(await configure({ prompter }), "team/second-model");
   });
 
   it.each([
@@ -139,11 +141,9 @@ describe("LiteLLM discovery-backed onboarding", () => {
     async (_failure, body, status, reason) => {
       discoveryFetch.mockImplementation(async () => reply(body, status));
       const prompter = createPrompter({ manualModel: "manual-model" });
-      const { result, config } = await configure({ prompter });
-
+      const configured = await configure({ prompter });
       expect(prompter.note).toHaveBeenCalledWith(expect.stringMatching(reason), expect.any(String));
-      expect(result.defaultModel).toBe("litellm/manual-model");
-      expectModel(config, "manual-model");
+      expectModel(configured, "manual-model");
     },
   );
 
@@ -201,24 +201,14 @@ describe("LiteLLM discovery-backed onboarding", () => {
         config: {
           models: {
             mode,
-            providers: {
-              LiteLLM: {
-                baseUrl: "http://127.0.0.1:4000/v1",
-                apiKey: "authored-key",
-                request: { allowPrivateNetwork: false, headers: { "X-Proxy-Tenant": "fixture" } },
-                models: [structuredClone(servedModel)],
-              },
-            },
+            providers: { LiteLLM: structuredClone(authoredProvider) },
           },
         },
       });
 
       expect(Object.keys(config.models?.providers ?? {})).toEqual(["litellm"]);
-      expect(config.models?.providers?.litellm).toMatchObject({
-        apiKey: "authored-key",
-        request: { allowPrivateNetwork: false, headers: { "X-Proxy-Tenant": "fixture" } },
-        models: [servedModel],
-      });
+      expect(config.models?.mode).toBe(mode);
+      expect(config.models?.providers?.litellm).toMatchObject(authoredProvider);
       expect(config.agents?.defaults?.model).toEqual({ primary: "litellm/local-qwen" });
     },
   );
