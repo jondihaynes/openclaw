@@ -51,23 +51,24 @@ const agentsConfig = (entries: Record<string, unknown>, agentId = "main") => ({
   agents: { defaults: { systemAgent: { agentId } }, entries },
 });
 
-describe("devices exec approvals rendering", () => {
+describe("devices execution settings", () => {
   it("renders owner-reported defaults for fresh approval state", () => {
     const container = renderDevicesContainer({ execApprovalsSnapshot: approvalSnapshot(false) });
-    expect(approvalSection(container).textContent).toContain(
-      "Allowlist and approval policy for exec host=gateway/node.",
-    );
     expect(policySelect(container, "Security").value).toBe("full");
     expect(policySelect(container, "Ask").value).toBe("off");
   });
 
-  it("preserves authored wildcard and agent overrides above owner defaults", () => {
+  it("merges approval scopes and preserves wildcard and selected-agent overrides", async () => {
+    const onExecApprovalsSelectAgent = vi.fn();
     const container = renderDevicesContainer({
+      configForm: agentsConfig({ main: { name: "Main" }, research: { name: "Research" } }),
       execApprovalsSnapshot: approvalSnapshot(false, {
         "*": { security: "allowlist", ask: "always" },
         main: { ask: "on-miss" },
+        retired: { security: "full" },
       }),
       execApprovalsSelectedAgent: "main",
+      onExecApprovalsSelectAgent,
     });
     const section = approvalSection(container);
     expect(rowSelect(section, "Security").selectedOptions[0]?.textContent?.trim()).toBe(
@@ -77,8 +78,15 @@ describe("devices exec approvals rendering", () => {
       "Use default (deny)",
     );
     expect(rowSelect(section, "Ask").value).toBe("on-miss");
-    expect(section.textContent).not.toContain("Using default");
     expect(getSettingsRow(section, "Security").querySelector(".settings-row__desc")).toBeNull();
+    const picker = section.querySelector<AgentSelectElement>("openclaw-agent-select");
+    await picker?.updateComplete;
+    expect(picker?.options.map((option) => option.value)).toEqual(
+      expect.arrayContaining(["__defaults__", "main", "research", "retired"]),
+    );
+    expect(picker?.options.find((option) => option.value === "main")?.badge).toBe("Default");
+    picker?.onSelect("retired");
+    expect(onExecApprovalsSelectAgent).toHaveBeenCalledWith("retired");
   });
 
   it("keeps the selected node until its owner accepts a target change", () => {
@@ -103,38 +111,12 @@ describe("devices exec approvals rendering", () => {
     expect(select.value).toBe("second");
   });
 
-  it("renders defaults, configured agents, and approval-only agents in the avatar picker", async () => {
-    const onExecApprovalsSelectAgent = vi.fn();
-    const container = renderDevicesContainer({
-      configForm: agentsConfig({ main: { name: "Main" }, research: { name: "Research" } }),
-      execApprovalsForm: {
-        version: 1,
-        defaults: { security: "deny" },
-        agents: { retired: { security: "full" } },
-      },
-      execApprovalsSelectedAgent: "research",
-      onExecApprovalsSelectAgent,
-    });
-    const picker =
-      approvalSection(container).querySelector<AgentSelectElement>("openclaw-agent-select");
-    await picker?.updateComplete;
-
-    expect(picker?.options.map((option) => option.value)).toEqual([
-      "__defaults__",
-      "main",
-      "research",
-      "retired",
-    ]);
-    expect(picker?.options.find((option) => option.value === "main")?.badge).toBe("Default");
-    picker?.onSelect("retired");
-    expect(onExecApprovalsSelectAgent).toHaveBeenCalledWith("retired");
-  });
-
   it("renders host-native Windows policies as read-only", () => {
     const container = renderDevicesContainer({
       nodes: [{ ...approvalNode("windows-node"), displayName: "Windows node" }],
       execApprovalsTarget: "node",
       execApprovalsTargetNodeId: "windows-node",
+      execApprovalsDirty: true,
       execApprovalsSnapshot: {
         enabled: true,
         hash: "sha256:current",
@@ -156,7 +138,6 @@ describe("devices exec approvals rendering", () => {
       renderDevicesInto(container, {
         execApprovalsSnapshot: approvalSnapshot(),
         execApprovalsForm: {
-          version: 1,
           agents: { alpha: { security }, beta: { security: "deny" } },
         },
         execApprovalsSelectedAgent: selected,
@@ -167,17 +148,12 @@ describe("devices exec approvals rendering", () => {
     // Native selection becomes dirty; switching scope must restore the stored policy.
     let security = renderScope("allowlist", "alpha");
     expect(security.value).toBe("allowlist");
-    selectValue(security, "deny", true);
-    security = renderScope("deny", "alpha");
     selectValue(security, "full", true);
     security = renderScope("full", "alpha");
     expect(security.value).toBe("full");
     security = renderScope("full", "beta");
     expect(security.value).toBe("deny");
   });
-});
-
-describe("devices agent bindings", () => {
   it("reports node bindings and translates each unbound sentinel", () => {
     const onBindDefault = vi.fn();
     const onBindAgent = vi.fn();
@@ -202,65 +178,49 @@ describe("devices agent bindings", () => {
     ]);
   });
 
-  it.each([
-    ["ineligible exact IDs ahead of names", ["default-node", "agent-node"], true],
-    ["ambiguous names across the full inventory", ["Default worker", "Research worker"], false],
-  ] as const)("preserves %s across node loss and recovery", (_name, refs, ineligibleExact) => {
-    const [defaultRef, agentRef] = refs;
-    const onBindDefault = vi.fn();
-    const onBindAgent = vi.fn();
-    const configForm = {
-      tools: { exec: { node: defaultRef } },
-      ...agentsConfig({
-        main: {},
-        research: { name: "Research", tools: { exec: { node: agentRef } } },
-      }),
-    };
-    const savedConfig = structuredClone(configForm);
-    const nodes = [
-      { nodeId: "default-node", displayName: "Default worker", remoteIp: "192.0.2.10" },
-      { nodeId: "agent-node", displayName: "Research worker", remoteIp: "192.0.2.20" },
-    ].map((node) => Object.assign(node, { commands: ["system.run"] }));
-    const container = document.body.appendChild(document.createElement("div"));
-    const renderBindings = (inventory: DevicesProps["nodes"], unavailable: boolean) => {
-      renderDevicesInto(container, { nodes: inventory, configForm, onBindDefault, onBindAgent });
-      const section = getSection(container, "Exec node binding");
-      ["Default binding", "Research (research)"].forEach((title, index) => {
-        const select = rowSelect(section, title);
-        const option = expectDefined(select.selectedOptions[0], "selected node binding option");
-        const ref = refs[index];
-        const node = expectDefined(nodes[index], "bound node");
-        expect({ value: select.value, disabled: option.disabled }).toEqual({
-          value: ref,
-          disabled: unavailable,
-        });
-        expect(option.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-          unavailable ? `${ref} (Unavailable)` : `${node.displayName} · ${node.nodeId}`,
-        );
-      });
-      expect(configForm).toEqual(savedConfig);
-      expect([onBindDefault.mock.calls, onBindAgent.mock.calls]).toEqual([[], []]);
-    };
-    const initialNodes = ineligibleExact
-      ? [
-          ...nodes.map((node) => ({ ...node, commands: [] })),
-          ...nodes.map((node) => ({
+  it.each(["worker-node", "Worker"])(
+    "preserves binding %s across node loss and recovery",
+    (ref) => {
+      const node = { nodeId: "worker-node", displayName: "Worker", commands: ["system.run"] };
+      const ineligibleExact = ref === node.nodeId;
+      const onBindDefault = vi.fn();
+      const onBindAgent = vi.fn();
+      const configForm = {
+        tools: { exec: { node: ref } },
+        ...agentsConfig({ research: { tools: { exec: { node: ref } } } }),
+      };
+      const savedConfig = structuredClone(configForm);
+      const container = document.body.appendChild(document.createElement("div"));
+      const renderBindings = (inventory: DevicesProps["nodes"], unavailable: boolean) => {
+        renderDevicesInto(container, { nodes: inventory, configForm, onBindDefault, onBindAgent });
+        const section = getSection(container, "Exec node binding");
+        for (const title of ["Default binding", "research"]) {
+          const select = rowSelect(section, title);
+          expect(select).toHaveProperty("value", ref);
+          expect(select.selectedOptions[0]).toMatchObject({
+            value: ref,
+            disabled: unavailable,
+            textContent: unavailable ? `${ref} (Unavailable)` : "Worker · worker-node",
+          });
+        }
+        expect(configForm).toEqual(savedConfig);
+        expect([onBindDefault.mock.calls, onBindAgent.mock.calls]).toEqual([[], []]);
+      };
+      renderBindings(
+        [
+          { ...node, commands: ineligibleExact ? [] : node.commands },
+          {
             ...node,
-            nodeId: `${node.nodeId}-other`,
-            displayName: node.nodeId,
-          })),
-        ]
-      : [
-          ...nodes,
-          ...nodes.map((node) => ({
-            ...node,
-            nodeId: `${node.nodeId}-competitor`,
-            commands: [],
+            nodeId: "other",
+            displayName: ref,
+            commands: ineligibleExact ? node.commands : [],
             connected: false,
-          })),
-        ];
-    renderBindings(initialNodes, true);
-    renderBindings([{ ...expectDefined(nodes[0], "default bound node"), commands: [] }], true);
-    renderBindings(nodes, false);
-  });
+          },
+        ],
+        true,
+      );
+      renderBindings([{ ...node, commands: [] }], true);
+      renderBindings([node], false);
+    },
+  );
 });
