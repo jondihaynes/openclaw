@@ -28,12 +28,12 @@ function objectValidator(properties: Record<string, TSchema>, options: TSchema =
   return validator(objectSchema(properties, options));
 }
 
-function closedObject(properties: Record<string, TSchema>) {
-  return objectSchema(properties, {
-    required: Object.keys(properties),
-    additionalProperties: false,
-  });
+function requiredObject(properties: Record<string, TSchema>, options: TSchema = {}) {
+  return objectSchema(properties, { required: Object.keys(properties), ...options });
 }
+
+const closedObject = (properties: Record<string, TSchema>) =>
+  requiredObject(properties, { additionalProperties: false });
 
 function valueValidator(value: TSchema, options: TSchema = {}) {
   return validator(objectSchema({ value }, options));
@@ -54,7 +54,7 @@ const boolean = { type: "boolean" };
 const nil = { type: "null" };
 const positiveInteger = { ...integer, minimum: 1 };
 const optionalLimit = Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]));
-const requiredCount = objectSchema({ count: integer }, { required: ["count"] });
+const requiredCount = requiredObject({ count: integer });
 
 const profiles = ["dynamic-execution", "embedded-aot"] as const;
 describe.each(profiles)("validateToolArguments (%s)", (profile) => {
@@ -69,10 +69,7 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
 
   it("does not retain evaluated properties between tool calls", () => {
     const validate = validator({
-      anyOf: [
-        { type: "object", properties: { a: number } },
-        { type: "object", properties: { b: number } },
-      ],
+      anyOf: [objectSchema({ a: number }), objectSchema({ b: number })],
       unevaluatedProperties: false,
     });
     expect(validate({ a: 1 })).toEqual({ a: 1 });
@@ -98,9 +95,8 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
     ];
     for (const [branches, value] of cases) {
       for (const alternatives of [branches, branches.toReversed()]) {
-        const validate = objectValidator(
-          { value: { [form]: alternatives }, count: integer },
-          { required: ["value", "count"] },
+        const validate = validator(
+          requiredObject({ value: { [form]: alternatives }, count: integer }),
         );
         const input = { value: structuredClone(value), count: "2" };
         expect(validate(input)).toEqual({ value, count: 2 });
@@ -110,10 +106,7 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
   });
 
   it.each(["anyOf", "oneOf"])("recovers %s branches and preserves nested values", (keyword) => {
-    const item = objectSchema(
-      { id: { [keyword]: [number, string] }, count: integer },
-      { required: ["id", "count"] },
-    );
+    const item = requiredObject({ id: { [keyword]: [number, string] }, count: integer });
     const validate = valueValidator({ [keyword]: [{ type: "array", items: item }, boolean] });
     expectValue(validate, [{ id: "00123", count: "2" }], [{ id: "00123", count: 2 }]);
     expectValue(validate, "true", true);
@@ -169,31 +162,21 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
   });
 
   it("preserves nullable scalar values and null-only coercions", () => {
-    const numbers = [
-      ["2.5", 2.5],
-      [false, 0],
-      [0, 0],
-    ] as const;
-    const strings = [
-      [false, "false"],
-      [0, "0"],
-      ["", ""],
-      ["existing", "existing"],
-    ] as const;
-    const nulls = [false, 0, ""].map((input) => [input, null] as const);
-    const cases: [Tool["parameters"], readonly (readonly [unknown, unknown])[]][] = [
-      [{ type: ["number", "null"] }, numbers],
-      [{ type: ["null", "number"] }, numbers],
-      [{ type: ["string", "null"] }, strings],
-      [{ type: ["null", "string"] }, strings],
-      [{ type: "null" }, nulls],
-      [{ type: ["null"] }, nulls],
-    ];
-    for (const [schema, conversions] of cases) {
-      const validate = valueValidator(schema, { required: ["value"] });
+    const numbers = { inputs: ["2.5", false, 0], outputs: [2.5, 0, 0] };
+    const strings = { inputs: [false, 0, "", "existing"], outputs: ["false", "0", "", "existing"] };
+    const nulls = { inputs: [false, 0, ""], outputs: [null, null, null] };
+    for (const [type, { inputs, outputs }] of [
+      [["number", "null"], numbers],
+      [["null", "number"], numbers],
+      [["string", "null"], strings],
+      [["null", "string"], strings],
+      ["null", nulls],
+      [["null"], nulls],
+    ] as const) {
+      const validate = valueValidator({ type }, { required: ["value"] });
       expectValue(validate, null, null);
-      for (const [input, output] of conversions) {
-        expectValue(validate, input, output);
+      for (const [index, input] of inputs.entries()) {
+        expectValue(validate, input, outputs[index]);
       }
     }
   });
@@ -218,9 +201,8 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
   });
 
   it("coerces additional properties without changing declared string fields", () => {
-    const validate = objectValidator(
-      { label: string, count: integer },
-      { required: ["label", "count"], additionalProperties: integer },
+    const validate = validator(
+      requiredObject({ label: string, count: integer }, { additionalProperties: integer }),
     );
     const input = { label: "1e2", count: "1", extra: "2" };
     expect(validate(input)).toEqual({ label: "1e2", count: 1, extra: 2 });
@@ -238,12 +220,8 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
       "typed-record",
     );
     const input = { counts: { first: "1" }, choice: "2", value: "00123", limit: null };
-    expect(validate(input)).toEqual({
-      counts: { first: 1 },
-      choice: 2,
-      value: "00123",
-      limit: null,
-    });
+    const expected = { ...input, counts: { first: 1 }, choice: 2 };
+    expect(validate(input)).toEqual(expected);
     const invalid = { ...input, limit: 0 };
     expect(() => validate(invalid)).toThrow(/Validation failed for tool "typed-record"/);
   });
@@ -361,11 +339,7 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
 
   it("applies reference siblings without dropping their coercion or validation", () => {
     const validate = rootValidator(
-      {
-        $ref: "#/$defs/base",
-        properties: { enabled: boolean },
-        required: ["enabled"],
-      },
+      { $ref: "#/$defs/base", properties: { enabled: boolean }, required: ["enabled"] },
       { base: requiredCount },
     );
     expectValue(validate, '{"enabled":"true","count":"2"}', { enabled: true, count: 2 });
