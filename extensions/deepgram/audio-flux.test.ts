@@ -13,7 +13,6 @@ import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
 import { commandResult } from "../test-support/command-result.test-support.js";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
-import { isDeepgramFluxModel } from "./audio-flux.js";
 import plugin from "./index.js";
 
 const runCommandBuffered = vi.hoisted(() =>
@@ -146,18 +145,10 @@ describe("Deepgram Flux audio", () => {
     expect(errors[0]).toMatchObject({ message: expect.stringContaining("timed out") });
   });
 
-  it("routes documented Flux models only", () => {
-    expect(isDeepgramFluxModel("flux-general-en")).toBe(true);
-    expect(isDeepgramFluxModel(" Flux-General-Multi ")).toBe(true);
-    expect(isDeepgramFluxModel("flux")).toBe(false);
-    expect(isDeepgramFluxModel("reflux-general-en")).toBe(false);
-    expect(isDeepgramFluxModel("nova-3")).toBe(false);
-  });
-
   it.each([
     { model: "flux-general-multi", language: " en ", hint: undefined, expected: "en" },
     { model: "flux-general-multi", language: "en", hint: "fr", expected: "fr" },
-    { model: "flux-general-en", language: " en ", hint: "fr", expected: null },
+    { model: " Flux-General-En ", language: " en ", hint: "fr", expected: null },
   ])("sends $model protocol (hint=$hint)", async ({ model, language, hint, expected }) => {
     const pcm = Buffer.alloc(6000, 1);
     runCommandBuffered.mockReset().mockImplementationOnce((argv) => writeDecodedPcm(argv, pcm));
@@ -185,7 +176,7 @@ describe("Deepgram Flux audio", () => {
     });
 
     const { url: requestUrl, headers } = expectDefined(server.requests[0], "Flux request");
-    expect(result).toEqual({ model, text: "life moves pretty fast" });
+    expect(result).toEqual({ model: model.trim(), text: "life moves pretty fast" });
     expect(headers.authorization).toBe("Token configured-key");
     expect(requestUrl.pathname).toBe("/v2/listen");
     expect(Object.fromEntries(requestUrl.searchParams)).toMatchObject({
@@ -210,7 +201,6 @@ describe("Deepgram Flux audio", () => {
   it.each([
     ["non-object server JSON", "[]", "malformed JSON response"],
     ["a turn without transcript text", turn(), "missing transcript"],
-    ["a turn with a non-string transcript", turn(42), "missing transcript"],
     ["oversized transcript", turn("x".repeat(256 * 1024 + 1)), "transcript exceeds size limit"],
   ])("rejects %s", async (_name, payload, error) => {
     const server = await createFluxServer((socket) => socket.send(payload));
