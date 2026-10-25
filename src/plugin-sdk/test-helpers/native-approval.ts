@@ -429,7 +429,9 @@ export function createLocalApprovalPromptTestFixture(params: {
   };
 }
 
-export function createNativeApprovalRuntimeStub() {
+export function createNativeApprovalRuntimeStub(): NonNullable<
+  ChannelApprovalCapability["nativeRuntime"]
+> {
   return {
     availability: { isConfigured: vi.fn(), shouldHandle: vi.fn() },
     presentation: {
