@@ -13,8 +13,8 @@ export function DashboardPreview(props: {
   gatewaySnapshot?: ApplicationGatewaySnapshot;
   sessionKey?: string;
   agentId?: string;
+  viewportTarget: () => HTMLElement;
 }) {
-  let host!: HTMLElement;
   const [nearVisible, setNearVisible] = createSignal(false);
   onSettled(() => {
     let active = true;
@@ -23,8 +23,8 @@ export function DashboardPreview(props: {
         setNearVisible(visibility.nearVisible);
       }
     });
-    // Bounds before the first paint would activate every gallery preview at once.
-    const frame = window.requestAnimationFrame(() => visibility.observe(host));
+    // Probe the card outside skipped content; pre-paint bounds would activate every preview.
+    const frame = window.requestAnimationFrame(() => visibility.observe(props.viewportTarget()));
     return () => {
       active = false;
       window.cancelAnimationFrame(frame);
@@ -32,11 +32,7 @@ export function DashboardPreview(props: {
     };
   });
   return (
-    <openclaw-dashboard-preview
-      ref={(element) => {
-        host = element;
-      }}
-    >
+    <openclaw-dashboard-preview>
       <Show when={nearVisible()}>
         <>
           {createErrorBoundary(

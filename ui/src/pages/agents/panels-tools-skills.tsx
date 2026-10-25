@@ -1,5 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, For, Loading, Show, createMemo, isPending, onSettled } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createSignal,
+  isPending,
+  onSettled,
+} from "solid-js";
 import {
   createRuntimeToolMatcher,
   createToolPolicyMatcher,
@@ -444,6 +453,7 @@ export function AgentTools(
                       {(tool) => {
                         let details!: HTMLDetailsElement;
                         let summary!: HTMLElement;
+                        const [detailsOpen, setDetailsOpen] = createSignal(false);
                         onSettled(() => {
                           const key = anchorId();
                           toolDetails.add(details);
@@ -481,6 +491,7 @@ export function AgentTools(
                             ref={(element) => (details = element)}
                             class="agent-tool-card"
                             id={anchorId()}
+                            onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
                           >
                             <summary
                               ref={(element) => (summary = element)}
@@ -527,34 +538,36 @@ export function AgentTools(
                                 />
                               </span>
                             </summary>
-                            <div class="agent-tool-details">
-                              <div class="agent-tool-details-strip">
-                                <div class="agent-tool-detail agent-tool-detail--inline">
-                                  <div class="label">{t("agentTools.access")}</div>
-                                  <div>{policyLabels().state}</div>
-                                </div>
-                                <div class="agent-tool-detail agent-tool-detail--inline">
-                                  <div class="label">{t("agentTools.source")}</div>
-                                  <div>{sourceLabel()}</div>
-                                </div>
-                                {defaultProfiles().length > 0 ? (
+                            <Show when={detailsOpen()}>
+                              <div class="agent-tool-details">
+                                <div class="agent-tool-details-strip">
                                   <div class="agent-tool-detail agent-tool-detail--inline">
-                                    <div class="label">{t("agentTools.defaultPresets")}</div>
-                                    {renderToolMetaBadges(defaultProfiles())}
+                                    <div class="label">{t("agentTools.access")}</div>
+                                    <div>{policyLabels().state}</div>
                                   </div>
-                                ) : undefined}
-                                <div class="agent-tool-detail agent-tool-detail--inline">
-                                  <div class="label">{t("agentTools.previewTitle")}</div>
-                                  <div>
-                                    <PreviewPart part="details" />
+                                  <div class="agent-tool-detail agent-tool-detail--inline">
+                                    <div class="label">{t("agentTools.source")}</div>
+                                    <div>{sourceLabel()}</div>
                                   </div>
+                                  {defaultProfiles().length > 0 ? (
+                                    <div class="agent-tool-detail agent-tool-detail--inline">
+                                      <div class="label">{t("agentTools.defaultPresets")}</div>
+                                      {renderToolMetaBadges(defaultProfiles())}
+                                    </div>
+                                  ) : undefined}
+                                  <div class="agent-tool-detail agent-tool-detail--inline">
+                                    <div class="label">{t("agentTools.previewTitle")}</div>
+                                    <div>
+                                      <PreviewPart part="details" />
+                                    </div>
+                                  </div>
+                                  <a class="agent-tool-jump" href={`#${anchorId()}`}>
+                                    {t("agentTools.linkTool")}
+                                  </a>
                                 </div>
-                                <a class="agent-tool-jump" href={`#${anchorId()}`}>
-                                  {t("agentTools.linkTool")}
-                                </a>
+                                <PreviewPart part="policy" />
                               </div>
-                              <PreviewPart part="policy" />
-                            </div>
+                            </Show>
                           </details>
                         );
                       }}

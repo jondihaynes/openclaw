@@ -81,6 +81,7 @@ function DashboardCard(props: {
   handlers: DashboardGalleryHandlers;
   gatewaySnapshot?: ApplicationGatewaySnapshot;
 }) {
+  let card!: HTMLElement;
   const target = createMemo(() =>
     isSessionKeyAddressable(props.row.key, props.data.globalScope)
       ? sessionNavigationTarget({
@@ -102,6 +103,7 @@ function DashboardCard(props: {
     <>
       <div class="dashboard-preview" aria-hidden="true" inert>
         <DashboardPreview
+          viewportTarget={() => card}
           gatewaySnapshot={props.gatewaySnapshot}
           sessionKey={props.row.key}
           agentId={props.row.agentId}
@@ -139,7 +141,13 @@ function DashboardCard(props: {
     </>
   );
   return (
-    <article class="dashboard-card" data-dashboard-session={props.row.key}>
+    <article
+      ref={(element) => {
+        card = element;
+      }}
+      class="dashboard-card"
+      data-dashboard-session={props.row.key}
+    >
       <Show
         when={target()}
         fallback={

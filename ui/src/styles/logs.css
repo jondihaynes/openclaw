@@ -43,6 +43,8 @@ main.content:where(.content--logs-page) .content-header {
 
 .log-row {
   display: grid;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 45px;
   grid-template-columns: 90px 70px minmax(140px, 200px) minmax(0, 1fr);
   gap: 12px;
   align-items: start;

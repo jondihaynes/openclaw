@@ -1,6 +1,6 @@
 import type { ElementHandle, Locator, Page } from "playwright";
 import { buildWidgetDocument } from "../../src/canvas/wrap.ts";
-import type { ConfigSchemaResponse, CronJob } from "../../ui/src/api/types.ts";
+import type { ConfigSchemaResponse, CronJob, GatewaySessionRow } from "../../ui/src/api/types.ts";
 import { pathForAgentPanel, pathForRoute } from "../../ui/src/app-route-paths.ts";
 import { createSkill } from "../../ui/src/pages/skills/view.test-support.ts";
 import type {
@@ -23,6 +23,11 @@ import {
   browserResourceMethodResponses,
   createBrowserResourceScenarios,
 } from "./control-ui-browser-resource-scenarios.ts";
+import { dataActivityScenarios } from "./control-ui-data-activity-scenarios.ts";
+import { dataBoardScenarios } from "./control-ui-data-board-scenarios.ts";
+import { dataCatalogScenarios } from "./control-ui-data-catalog-scenarios.ts";
+import { dataLogScenarios } from "./control-ui-data-log-scenarios.ts";
+import { dataUsageScenarios } from "./control-ui-data-usage-scenarios.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
 
@@ -56,6 +61,14 @@ const retainedMcpFrames = new WeakMap<Page, Array<ElementHandle>>();
 
 export type InteractionSandbox = { sandboxUrl: string; sandboxPort: number };
 export type InteractionEvidence = Record<string, number | boolean>;
+type InteractionSession = GatewaySessionRow &
+  NonNullable<ControlUiMockGatewayScenario["sessions"]>[number];
+export type InteractionFixtureOverrides = Omit<
+  Partial<ControlUiMockGatewayScenario>,
+  "sessions"
+> & {
+  sessions?: InteractionSession[];
+};
 
 type InteractionFixtureOptions = {
   runningSessions?: boolean;
@@ -86,6 +99,10 @@ export type InteractionScenario = {
   route: string;
   expected: string;
   fixture?: InteractionFixtureOptions;
+  /** Large-data campaigns replace only their domain's synthetic Gateway responses. */
+  fixtureOverrides?: (sandbox?: InteractionSandbox) => InteractionFixtureOverrides;
+  createRequestHandlers?: () => Record<string, (params: unknown) => unknown>;
+  dataPage?: string;
   /** Resource campaigns opt into the longer inventory and idle scenarios. */
   resourceOnly?: boolean;
   observationBrowser?: boolean;
@@ -98,6 +115,30 @@ export type InteractionScenario = {
   prepare: (page: Page, gateway: MockGatewayControls) => Promise<void>;
   run: (page: Page, gateway: MockGatewayControls) => Promise<void | InteractionEvidence>;
 };
+
+export function createScenarioFixture(
+  buildId: string,
+  version: string,
+  scenario: InteractionScenario,
+  sandbox?: InteractionSandbox,
+): ControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
+  const base = createInteractionFixture(buildId, version, scenario.fixture, sandbox);
+  const overrides = scenario.fixtureOverrides?.(sandbox);
+  return {
+    ...base,
+    ...overrides,
+    sessions: overrides?.sessions ?? base.sessions,
+    featureMethods: overrides?.featureMethods
+      ? [
+          ...new Set([
+            ...(base.featureMethods ?? defaultControlUiFeatureMethods),
+            ...overrides.featureMethods,
+          ]),
+        ]
+      : base.featureMethods,
+    methodResponses: { ...base.methodResponses, ...overrides?.methodResponses },
+  };
+}
 
 function resourceWidgetHtml(name: string) {
   return buildWidgetDocument(
@@ -600,6 +641,10 @@ async function navigation(page: Page, view: "pages" | "sessions") {
     .waitFor();
 }
 
+export async function prepareInteractionNavigation(page: Page) {
+  await navigation(page, "pages");
+}
+
 async function switchSession(page: Page, index: 0 | 1) {
   await navigation(page, "sessions");
   await page
@@ -619,7 +664,7 @@ async function prepareChat(page: Page) {
   await frames(page);
 }
 
-async function openInteractionPanel(
+export async function openInteractionPanel(
   page: Page,
   panel: "Dashboard" | "Browser" = "Dashboard",
   sessionIndex: 0 | 1 = 0,
@@ -1558,6 +1603,11 @@ async function prepareProviderUsage(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...dataActivityScenarios,
+  ...dataBoardScenarios,
+  ...dataCatalogScenarios,
+  ...dataLogScenarios,
+  ...dataUsageScenarios,
   ...createBrowserResourceScenarios({
     route: controlUiSessionPath(sessionKeys[0]),
     openPanel: openInteractionPanel,

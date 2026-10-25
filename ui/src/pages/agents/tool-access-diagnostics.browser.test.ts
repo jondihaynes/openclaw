@@ -1,12 +1,13 @@
 import { assert, expect, it } from "vitest";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createBaseParams } from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 installBrowserHistoryIsolation();
 
-it.each([false, true])("only verifies saved policy (configDirty=%s)", (configDirty) => {
+it.each([false, true])("only verifies saved policy (configDirty=%s)", async (configDirty) => {
   const label = configDirty ? "Old profile exclusion" : "Messaging profile";
   const source = "agents.entries.main.tools.profile";
   const profile = "messaging";
@@ -45,7 +46,8 @@ it.each([false, true])("only verifies saved policy (configDirty=%s)", (configDir
   }
   expect(summary?.textContent).toContain("Off");
   expect(summary?.textContent).toContain("Messaging profile");
-  card.open = true;
+  card.querySelector<HTMLElement>("summary")?.click();
+  await waitForSolid(() => expect(card.querySelector(".agent-tool-policy")).not.toBeNull());
   for (const text of ["Session preview", source, "tools.profile", "Active"]) {
     expect(card.querySelector(".agent-tool-policy")?.textContent).toContain(text);
   }

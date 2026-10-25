@@ -24,7 +24,7 @@ import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-cold-load-trace.ts";
 import {
-  createInteractionFixture,
+  createScenarioFixture,
   interactionScenarios,
   settleSidebarBackgroundWork,
   type InteractionEvidence,
@@ -54,6 +54,7 @@ const { values } = parseArgs({
   options: {
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
+    "control-bundle-dir": { type: "string" },
     output: { type: "string", default: ".artifacts/control-ui-interactions" },
     steps: { type: "string" },
     viewport: { type: "string", default: "both" },
@@ -69,6 +70,8 @@ const { values } = parseArgs({
     "process-wakeups": { type: "boolean", default: false },
     "projection-fixtures": { type: "boolean", default: false },
     "projection-counts": { type: "boolean", default: false },
+    "data-pages": { type: "boolean", default: false },
+    "retained-heap": { type: "boolean", default: false },
     headed: { type: "boolean", default: false },
   },
 });
@@ -94,12 +97,20 @@ if (!Number.isFinite(cpuThrottle) || cpuThrottle < 1) {
 if (!Number.isInteger(pairs) || pairs < 1) {
   throw new Error("pairs must be a positive integer");
 }
+if (values["control-bundle-dir"] && !values["compare-bundle-dir"]) {
+  throw new Error(
+    "control-bundle-dir requires compare-bundle-dir for baseline/candidate/control order",
+  );
+}
 if (!["desktop", "mobile", "both"].includes(values.viewport)) {
   throw new Error("viewport must be desktop, mobile or both");
 }
 const selectedIds = values.steps?.split(",");
 const scenarios = interactionScenarios.filter((step) => {
   if (Boolean(step.projectionFamily) !== values["projection-fixtures"]) {
+    return false;
+  }
+  if (!selectedIds && Boolean(step.dataPage) !== values["data-pages"]) {
     return false;
   }
   return selectedIds
@@ -110,9 +121,11 @@ if (!scenarios.length || selectedIds?.some((id) => !scenarios.some((step) => ste
   throw new Error("Unknown or empty interaction steps");
 }
 const artifactDir = createControlUiE2eArtifactDir("warm", values.output);
-const bundles = [values["bundle-dir"], values["compare-bundle-dir"]].filter(
-  (directory): directory is string => Boolean(directory),
-);
+const bundles = [
+  values["bundle-dir"],
+  values["compare-bundle-dir"],
+  values["control-bundle-dir"],
+].filter((directory): directory is string => Boolean(directory));
 const viewports = [
   { name: "desktop", width: 1440, height: 1000 },
   { name: "mobile", width: 390, height: 844 },
@@ -272,6 +285,8 @@ type Result = {
   layoutMs?: number;
   styleMs?: number;
   durationBreakdownMs?: Record<string, number>;
+  heap?: { beforeBytes: number; afterBytes: number; deltaBytes: number };
+  retainedHeap?: { beforeBytes: number; afterBytes?: number; deltaBytes?: number };
   longTasks?: { count: number; totalMs: number; maxMs: number };
   requests?: Record<string, number>;
   scenarioEvidence?: InteractionEvidence;
@@ -500,6 +515,9 @@ try {
           : "untraced CDP metrics",
         metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
         cpuThrottle,
+        retainedHeap: values["retained-heap"]
+          ? "Separate GC-controlled proof: collect before tracing and after action metrics/tracing; not a timing comparison."
+          : false,
         mobileTouchEmulation: true,
         screenshots: values["first-pair-screenshots"] ? "first pair per cell" : "all",
         resourceCounts: values["resource-counts"]
@@ -549,14 +567,16 @@ try {
           "No sidebar text input exists; measure command palette search separately",
           "No fake clocks, Lit probes or simulated transport delay",
         ],
-        scenarios: scenarios.map(({ id, route, expected, fixture }) => ({
+        scenarios: scenarios.map(({ id, route, expected, fixture, dataPage }) => ({
           id,
           route,
           expected,
           fixture,
+          dataPage,
         })),
         viewports,
-        bundles: servers.map(({ directory, build, indexSha256, projectionBuild }) => ({
+        bundles: servers.map(({ directory, build, indexSha256, projectionBuild }, index) => ({
+          role: index === 0 ? "baseline" : index === 1 ? "candidate" : "control",
           directory,
           ...build,
           indexSha256,
@@ -680,10 +700,10 @@ try {
               await cdp.send("Network.enable");
               await cdp.send("Network.setBypassServiceWorker", { bypass: true });
             }
-            const fixture = createInteractionFixture(
+            const fixture = createScenarioFixture(
               slot.build.buildId,
               slot.build.version,
-              scenario.fixture,
+              scenario,
               sandbox,
             );
             const sessions = createTeamScaleSidebarListOwner({
@@ -716,6 +736,7 @@ try {
                     }
                     return sessions.list(params).result;
                   },
+                  ...scenario.createRequestHandlers?.(),
                 },
               },
             );
@@ -758,6 +779,14 @@ try {
             await cdp.send("Performance.enable", {
               timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
             });
+            if (values["retained-heap"]) {
+              await cdp.send("HeapProfiler.collectGarbage");
+              const initial = await metrics(cdp);
+              if (initial.JSHeapUsedSize === undefined) {
+                throw new Error("Missing JSHeapUsedSize after initial garbage collection");
+              }
+              result.retainedHeap = { beforeBytes: initial.JSHeapUsedSize };
+            }
             if (values["selector-stats"]) {
               cdp.on(
                 "CSS.styleSheetAdded",
@@ -917,6 +946,13 @@ try {
               result.projectionCoverageArtifact = artifact;
             }
             const after = await metrics(cdp);
+            if (before.JSHeapUsedSize !== undefined && after.JSHeapUsedSize !== undefined) {
+              result.heap = {
+                beforeBytes: before.JSHeapUsedSize,
+                afterBytes: after.JSHeapUsedSize,
+                deltaBytes: after.JSHeapUsedSize - before.JSHeapUsedSize,
+              };
+            }
             result.longTasks = await taskProbe.evaluate(({ durations, observer }) => {
               durations.push(...observer.takeRecords().map((entry) => entry.duration));
               observer.disconnect();
@@ -1127,6 +1163,18 @@ try {
                   }
                 });
               }
+              const retainedHeap = result.retainedHeap;
+              if (values["retained-heap"] && cdp && retainedHeap && result.status === "passed") {
+                await capture(async () => {
+                  await cdp!.send("HeapProfiler.collectGarbage");
+                  const final = await metrics(cdp!);
+                  if (final.JSHeapUsedSize === undefined) {
+                    throw new Error("Missing JSHeapUsedSize after final garbage collection");
+                  }
+                  retainedHeap.afterBytes = final.JSHeapUsedSize;
+                  retainedHeap.deltaBytes = final.JSHeapUsedSize - retainedHeap.beforeBytes;
+                });
+              }
               if (!values["first-pair-screenshots"] || pair === 0 || result.status === "failed") {
                 await capture(() =>
                   page.screenshot({ path: path.join(artifactDir, `${artifactPrefix}.png`) }),
@@ -1259,37 +1307,42 @@ const summary = viewports
     ),
   )
   .toSorted((a, b) => (b.metrics.scriptMs?.median ?? 0) - (a.metrics.scriptMs?.median ?? 0));
-const comparisons = summary
-  .filter((row) => row.bundle === 0)
-  .flatMap((baseline) => {
-    const candidate = summary.find(
-      (row) => row.bundle === 1 && row.viewport === baseline.viewport && row.step === baseline.step,
-    );
-    if (!candidate) {
-      return [];
-    }
-    return Object.entries(baseline.metrics).flatMap(([metric, before]) => {
-      const after = candidate.metrics[metric];
-      if (!before || !after) {
+const compareBundle = (bundle: number) =>
+  summary
+    .filter((row) => row.bundle === 0)
+    .flatMap((baseline) => {
+      const candidate = summary.find(
+        (row) =>
+          row.bundle === bundle && row.viewport === baseline.viewport && row.step === baseline.step,
+      );
+      if (!candidate) {
         return [];
       }
-      return (["median", "p95", "min", "max"] as const).map((statistic) => ({
-        viewport: baseline.viewport,
-        step: baseline.step,
-        metric,
-        statistic,
-        before: before[statistic],
-        after: after[statistic],
-        percent: before[statistic] ? (after[statistic] / before[statistic] - 1) * 100 : null,
-        regression: after[statistic] > before[statistic] * 1.2,
-      }));
+      return Object.entries(baseline.metrics).flatMap(([metric, before]) => {
+        const after = candidate.metrics[metric];
+        if (!before || !after) {
+          return [];
+        }
+        return (["median", "p95", "min", "max"] as const).map((statistic) => ({
+          viewport: baseline.viewport,
+          step: baseline.step,
+          metric,
+          statistic,
+          before: before[statistic],
+          after: after[statistic],
+          percent: before[statistic] ? (after[statistic] / before[statistic] - 1) * 100 : null,
+          regression: after[statistic] > before[statistic] * 1.2,
+        }));
+      });
     });
-  });
+const comparisons = compareBundle(1);
+const controlComparisons = values["control-bundle-dir"] ? compareBundle(2) : undefined;
 await writeFile(
   path.join(artifactDir, "summary.json"),
   JSON.stringify(
     {
       comparisons,
+      controlComparisons,
       planned: viewports.length * scenarios.length * pairs * servers.length,
       executed: results.length,
       failed: results.filter((row) => row.status === "failed").length,

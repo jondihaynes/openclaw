@@ -155,17 +155,20 @@ function PluginConnectionAction(props: {
 }
 function InstalledInventory(props: InventoryProps): JSX.Element {
   const query = createMemo(() => props.query.trim().toLocaleLowerCase());
-  const plugins = createMemo(() =>
-    (props.result?.plugins ?? [])
-      .filter(
-        (plugin) =>
-          plugin.installed &&
-          (!query() ||
-            [plugin.name, plugin.id, plugin.description, plugin.packageName].some((value) =>
-              value?.toLocaleLowerCase().includes(query()),
-            )),
-      )
+  const inventory = createMemo(() => props.result?.plugins ?? []);
+  const installed = createMemo(() =>
+    inventory()
+      .filter((plugin) => plugin.installed)
       .toSorted((left, right) => left.name.localeCompare(right.name)),
+  );
+  const plugins = createMemo(() =>
+    installed().filter(
+      (plugin) =>
+        !query() ||
+        [plugin.name, plugin.id, plugin.description, plugin.packageName].some((value) =>
+          value?.toLocaleLowerCase().includes(query()),
+        ),
+    ),
   );
   return (
     <>

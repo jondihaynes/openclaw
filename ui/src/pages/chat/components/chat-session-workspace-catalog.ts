@@ -52,7 +52,7 @@ function mergeActivity(
 /** Projection of actual listed/touched paths. It never scans or fetches a tree. */
 export function projectWorkspaceCatalog(
   list: SessionWorkspaceListResult | null,
-  directories: Readonly<Record<string, SessionWorkspaceDirectory>> = {},
+  directories: Readonly<Record<string, Pick<SessionWorkspaceDirectory, "browser">>> = {},
 ) {
   const project = new Map<string, WorkspaceCatalogRow>();
   const session = new Map<string, WorkspaceCatalogFile>();

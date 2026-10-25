@@ -62,8 +62,12 @@ function fits(occupied: readonly number[], x: number, y: number, w: number, h: n
   return true;
 }
 
-function placeFirstFit(occupied: number[], item: BoardGridItem): BoardGridRect {
-  for (let y = 0; ; y += 1) {
+function placeFirstFit(
+  occupied: number[],
+  item: BoardGridItem,
+  firstOpenRow: number,
+): BoardGridRect {
+  for (let y = firstOpenRow; ; y += 1) {
     for (let x = 0; x <= BOARD_GRID_COLUMNS - item.w; x += 1) {
       if (fits(occupied, x, y, item.w, item.h)) {
         const columns = ((1 << item.w) - 1) << x;
@@ -89,7 +93,16 @@ export function layout(
 
 function layoutCanonicalItems(items: readonly BoardGridItem[]): BoardGridRect[] {
   const occupied: number[] = [];
-  return items.map((item) => placeFirstFit(occupied, item));
+  const fullRow = (1 << BOARD_GRID_COLUMNS) - 1;
+  let firstOpenRow = 0;
+  return items.map((item) => {
+    const rect = placeFirstFit(occupied, item, firstOpenRow);
+    // Occupancy only grows: a filled prefix can never admit a later widget.
+    while (occupied[firstOpenRow] === fullRow) {
+      firstOpenRow += 1;
+    }
+    return rect;
+  });
 }
 
 function contains(rect: BoardGridRect, cell: BoardGridCell): boolean {

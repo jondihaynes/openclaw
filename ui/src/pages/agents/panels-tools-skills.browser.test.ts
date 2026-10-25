@@ -122,17 +122,20 @@ describe("agents tools panel (browser)", () => {
     expect(row?.textContent).not.toContain("Not available in this chat session");
   });
 
-  it("distinguishes missing preview entries from disabled tools and an empty result", () => {
+  it("distinguishes missing preview entries from disabled tools and an empty result", async () => {
     const container = document.createElement("div");
     const params = createBaseParams({ effective: toolPreview });
     const view = mountSolid(AgentTools, params, container);
 
-    const included = container.querySelector("#agent-tool-read");
+    const included = container.querySelector<HTMLDetailsElement>("#agent-tool-read");
     const absent = container.querySelector("#agent-tool-exec");
     expect(included?.querySelectorAll(".agent-tool-summary__fact dd")[1]?.textContent?.trim()).toBe(
       "Included in preview",
     );
-    expect(included?.textContent).toContain("Listed in preview via Built-In.");
+    included?.querySelector<HTMLElement>("summary")?.click();
+    await waitForSolid(() =>
+      expect(included?.textContent).toContain("Listed in preview via Built-In."),
+    );
     expect(absent?.querySelectorAll(".agent-tool-summary__fact dd")[1]?.textContent?.trim()).toBe(
       "Not listed",
     );
@@ -557,6 +560,47 @@ describe("agents tools panel (browser)", () => {
     expect(tool.open).toBe(false);
   });
 
+  it("mounts diagnostics only while expanded and reads the latest preview on reopen", async () => {
+    const container = document.createElement("div");
+    const preview = (label: string): ToolsEffectiveResult => ({
+      ...toolPreview,
+      toolAccess: {
+        checked: "live-session",
+        profiles: [],
+        tools: [{ id: "read", status: "available", reasons: [{ kind: "runtime", label }] }],
+      },
+    });
+    const params = createBaseParams({
+      catalog: createReadToolCatalog(),
+      effective: preview("First receipt"),
+    });
+    const view = mountSolid(AgentTools, params, container);
+    const summary = container.querySelector<HTMLElement>(".agent-tool-summary");
+    assert(summary);
+    expect(container.querySelector(".agent-tool-details")).toBeNull();
+    expect(summary.querySelector("input.settings-toggle__input")).not.toBeNull();
+
+    summary.click();
+    await waitForSolid(() =>
+      expect(container.querySelector(".agent-tool-policy")?.textContent).toContain("First receipt"),
+    );
+    summary.click();
+    await waitForSolid(() => expect(container.querySelector(".agent-tool-details")).toBeNull());
+
+    view.update({ ...params, effective: preview("Latest receipt") });
+    expect(container.querySelector(".agent-tool-details")).toBeNull();
+    expect(container.querySelector(".agent-tool-summary")).toBe(summary);
+    summary.click();
+    await waitForSolid(() => {
+      expect(container.querySelector(".agent-tool-policy")?.textContent).toContain(
+        "Latest receipt",
+      );
+      expect(container.querySelector(".agent-tool-policy")?.textContent).not.toContain(
+        "First receipt",
+      );
+    });
+  });
+
   it("keeps the access toggle inside the collapsed tool summary", async () => {
     const container = document.createElement("div");
     mountSolid(
@@ -608,7 +652,8 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
-    tool!.open = true;
+    tool?.querySelector<HTMLElement>("summary")?.click();
+    await waitForSolid(() => expect(container.querySelector(".agent-tool-details")).not.toBeNull());
 
     expect(
       Array.from(container.querySelectorAll<HTMLElement>(".agent-tool-detail")).map((detail) => ({
