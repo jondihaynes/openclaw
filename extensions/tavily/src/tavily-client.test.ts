@@ -17,6 +17,19 @@ function providerRow(fields: Record<string, unknown>) {
   return { url: "https://example.com/news", title: "News", ...fields };
 }
 
+function configWithWebSearch(webSearch: Record<string, unknown>): OpenClawConfig {
+  return { plugins: { entries: { tavily: { config: { webSearch } } } } };
+}
+
+function expectNoEffects() {
+  expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
+  expect(writeCache).not.toHaveBeenCalled();
+}
+
+function requestOptions() {
+  return postTrustedWebToolsJson.mock.calls[0]?.[0];
+}
+
 function expectBounded(result: Record<string, unknown>, maxLength: number, token: string) {
   expect(result.truncated).toBe(true);
   expect(JSON.stringify(result).length).toBeLessThan(maxLength);
@@ -65,100 +78,64 @@ describe("tavily client", () => {
   });
 
   it.each([
-    { allowlist: ["TAVILY_API_KEY"], allowed: true },
-    { allowlist: [], allowed: false },
-  ])("honors the configured env provider allowlist $allowlist", async ({ allowlist, allowed }) => {
-    const cfg: OpenClawConfig = {
-      secrets: { providers: { "managed-env": { source: "env", allowlist } } },
-      plugins: {
-        entries: {
-          tavily: {
-            config: {
-              webSearch: {
-                apiKey: { source: "env", provider: "managed-env", id: "TAVILY_API_KEY" },
-              },
-            },
-          },
-        },
-      },
-    };
-    const request = runTavilySearch({ cfg, query: "managed credentials" });
-    if (allowed) {
-      await request;
-      expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
-      expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.apiKey).toBe("test-key");
-    } else {
-      await expect(request).rejects.toThrow("needs a Tavily API key");
-      expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
-      expect(writeCache).not.toHaveBeenCalled();
-    }
-  });
-
-  it("does not borrow ambient credentials for a different env SecretRef", async () => {
-    vi.stubEnv("OTHER_API_KEY", "other-test-key");
-    const cfg: OpenClawConfig = {
-      plugins: {
-        entries: {
-          tavily: {
-            config: {
-              webSearch: { apiKey: { source: "env", provider: "default", id: "OTHER_API_KEY" } },
-            },
-          },
-        },
-      },
-    };
-    await expect(runTavilySearch({ cfg, query: "unrelated credentials" })).rejects.toThrow(
-      "needs a Tavily API key",
-    );
-    expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
-    expect(writeCache).not.toHaveBeenCalled();
-  });
+    ["TAVILY_API_KEY", "managed-env", ["TAVILY_API_KEY"], true],
+    ["TAVILY_API_KEY", "managed-env", [], false],
+    ["OTHER_API_KEY", "default", ["OTHER_API_KEY"], false],
+  ] as const)(
+    "checks SecretRef %s via %s with allowlist %j",
+    async (id, provider, allowlist, allowed) => {
+      vi.stubEnv("OTHER_API_KEY", "other-test-key");
+      const cfg = configWithWebSearch({ apiKey: { source: "env", provider, id } });
+      cfg.secrets = { providers: { [provider]: { source: "env", allowlist: [...allowlist] } } };
+      const request = runTavilySearch({ cfg, query: "managed credentials" });
+      if (allowed) {
+        await request;
+        expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
+        expect(requestOptions().apiKey).toBe("test-key");
+      } else {
+        await expect(request).rejects.toThrow("needs a Tavily API key");
+        expectNoEffects();
+      }
+    },
+  );
 
   it.each([undefined, "", "   "])("defaults an omitted or blank base URL %j", async (baseUrl) => {
     await runTavilySearch({
-      cfg: { plugins: { entries: { tavily: { config: { webSearch: { baseUrl } } } } } },
+      cfg: configWithWebSearch({ baseUrl }),
       query: "default endpoint",
     });
-    expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.url).toBe("https://api.tavily.com/search");
+    expect(requestOptions().url).toBe("https://api.tavily.com/search");
   });
 
   it("prefers plugin credentials and endpoint over env defaults", async () => {
     vi.stubEnv("TAVILY_API_KEY", "env-key");
     vi.stubEnv("TAVILY_BASE_URL", "https://env.tavily.test");
     await runTavilySearch({
-      cfg: {
-        plugins: {
-          entries: {
-            tavily: {
-              config: { webSearch: { apiKey: "plugin-key", baseUrl: "https://plugin.test" } },
-            },
-          },
-        },
-      },
+      cfg: configWithWebSearch({ apiKey: "plugin-key", baseUrl: "https://plugin.test" }),
       query: "configured endpoint",
     });
-    expect(postTrustedWebToolsJson.mock.calls[0]?.[0]).toMatchObject({
+    expect(requestOptions()).toMatchObject({
       apiKey: "plugin-key",
       url: "https://plugin.test/search",
     });
   });
 
   it.each([
-    { kind: "search", timeoutSeconds: 30 },
-    { kind: "extract", timeoutSeconds: 60 },
-  ] as const)(
-    "uses environment defaults and the $kind timeout",
-    async ({ kind, timeoutSeconds }) => {
-      vi.stubEnv("TAVILY_API_KEY", "env-key");
-      vi.stubEnv("TAVILY_BASE_URL", "https://env.tavily.test");
-      await run(kind);
-      expect(postTrustedWebToolsJson.mock.calls[0]?.[0]).toMatchObject({
-        apiKey: "env-key",
-        url: `https://env.tavily.test/${kind}`,
-        timeoutSeconds,
-      });
-    },
-  );
+    { kind: "search", timeoutSeconds: 30, baseUrl: "https://env.tavily.test" },
+    { kind: "extract", timeoutSeconds: 60, baseUrl: "https://env.tavily.test" },
+    { kind: "search", timeoutSeconds: 30, baseUrl: "https://proxy.example/tavily/" },
+    { kind: "extract", timeoutSeconds: 60, baseUrl: "https://proxy.example/tavily/" },
+  ] as const)("uses $baseUrl and the $kind timeout", async ({ kind, timeoutSeconds, baseUrl }) => {
+    vi.stubEnv("TAVILY_API_KEY", "env-key");
+    vi.stubEnv("TAVILY_BASE_URL", baseUrl);
+    await run(kind);
+    expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
+    expect(requestOptions()).toMatchObject({
+      apiKey: "env-key",
+      url: `${baseUrl.replace(/\/$/, "")}/${kind}`,
+      timeoutSeconds,
+    });
+  });
 
   it.each(["search", "extract"] as const)("rejects unavailable %s capability", async (kind) => {
     const unavailable = Object.assign(new Error("Tavily capability unavailable"), {
@@ -176,16 +153,7 @@ describe("tavily client", () => {
   it.each(["search", "extract"] as const)("rejects invalid %s proxies", async (kind) => {
     vi.stubEnv("TAVILY_BASE_URL", "not a url");
     await expect(run(kind)).rejects.toBeInstanceOf(TypeError);
-    expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
-    expect(writeCache).not.toHaveBeenCalled();
-  });
-
-  it.each(["search", "extract"] as const)("appends %s to proxy paths", async (kind) => {
-    vi.stubEnv("TAVILY_BASE_URL", "https://proxy.example/tavily/");
-    await run(kind);
-    expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
-    const request = postTrustedWebToolsJson.mock.calls[0]?.[0];
-    expect(request.url).toBe(`https://proxy.example/tavily/${kind}`);
+    expectNoEffects();
   });
 
   it("normalizes hostile search URLs and publication prose", async () => {
@@ -233,13 +201,19 @@ describe("tavily client", () => {
     expect(JSON.stringify(result).length).toBeLessThan(25_000);
   });
 
-  it("bounds search text after special-token expansion", async () => {
+  it.each([
+    ["search", 21_000],
+    ["extract", 25_000],
+  ] as const)("bounds %s text after special-token expansion", async (kind, limit) => {
+    const expanded = "<s>".repeat(6_666);
     respondWith({
-      results: [providerRow({ title: "<s>".repeat(6_666), content: "<s>".repeat(1_000) })],
+      results: [
+        providerRow({ title: expanded, raw_content: expanded, content: "<s>".repeat(1_000) }),
+      ],
       answer: "<s>".repeat(1_000),
+      failed_results: [{ url: "https://example.com/tavily/failed", error: "<s>".repeat(1_333) }],
     });
-    const result = await runTavilySearch({ query: "sanitized Tavily search" });
-    expectBounded(result, 21_000, "<s>");
+    expectBounded(await run(kind), limit, "<s>");
   });
 
   it("bounds canonical percent-encoded URLs", async () => {
@@ -306,16 +280,6 @@ describe("tavily client", () => {
     expectBounded(result, 40_000, "<|im_start|>");
   });
 
-  it("bounds extracted content and failed errors after token expansion", async () => {
-    const raw_content = "<s>".repeat(6_666);
-    respondWith({
-      results: [providerRow({ raw_content, content: "<s>".repeat(1_000) })],
-      failed_results: [{ url: "https://example.com/tavily/failed", error: "<s>".repeat(1_333) }],
-    });
-    const result = await runTavilyExtract({ urls: ["https://example.com/source"] });
-    expectBounded(result, 25_000, "<s>");
-  });
-
   it.each(["search", "extract"] as const)("forwards exact %s aborts", async (kind) => {
     const controller = new AbortController();
     const reason = new Error(`${kind} cancelled`);
@@ -327,7 +291,7 @@ describe("tavily client", () => {
         }),
     );
     await expect(run(kind, controller.signal)).rejects.toBe(reason);
-    expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
+    expect(requestOptions().signal).toBe(controller.signal);
   });
 
   it.each(["search", "extract"] as const)("never caches cancelled %s", async (kind) => {
