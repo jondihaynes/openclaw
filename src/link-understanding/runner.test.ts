@@ -40,7 +40,9 @@ function fixture(body: string | MsgContext = source, config = cfg()) {
 function captureLogs() {
   vi.spyOn(globals, "shouldLogVerbose").mockReturnValue(true);
   const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
-  onTestFinished(() => vi.restoreAllMocks());
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
   return log;
 }
 
@@ -165,8 +167,8 @@ it.each([
       commandText: source,
       LinkUnderstanding: ["summarized page"],
     });
-    expect(fetchMock.mock.calls[0][0]).toMatchObject({ mode: "strict", timeoutMs });
-    expect(commandMock.mock.calls[1][0]).toEqual(["summarize", body]);
+    expect(fetchMock.mock.calls[0]?.[0]).toMatchObject({ mode: "strict", timeoutMs });
+    expect(commandMock.mock.calls[1]?.[0]).toEqual(["summarize", body]);
     expect(release).toHaveBeenCalledOnce();
     expect(JSON.stringify(log.mock.calls)).not.toContain(body);
   },

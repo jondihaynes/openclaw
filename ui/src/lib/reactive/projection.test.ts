@@ -64,20 +64,21 @@ describe("owner projections", () => {
   it.each(["mutable", "callback"])("adapts %s owners across reconnect and disposal", (kind) => {
     const state = { value: 1 };
     let notify = () => {};
+    const mutable =
+      kind === "mutable" ? projectMutableSource(state, (current) => current.value) : undefined;
     const view =
-      kind === "mutable"
-        ? projectMutableSource(state, (current) => current.value)
-        : projectCallbackOwner(
-            (publish) => {
-              notify = publish;
-              return state;
-            },
-            (current) => current.value,
-          ).view;
+      mutable ??
+      projectCallbackOwner(
+        (publish) => {
+          notify = publish;
+          return state;
+        },
+        (current) => current.value,
+      ).view;
     const set = (value: number) => {
       state.value = value;
-      if ("publish" in view) {
-        view.publish();
+      if (mutable) {
+        mutable.publish();
       } else {
         notify();
       }

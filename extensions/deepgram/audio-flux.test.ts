@@ -81,7 +81,12 @@ function turn(transcript?: unknown): string {
 
 async function writeDecodedPcm(argv: string[], pcm: Buffer) {
   await writeFile(expectDefined(argv.at(-1), "decoder output path"), pcm);
-  return { ...commandResult(), stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+  return {
+    ...commandResult(),
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.alloc(0),
+    termination: "exit" as const,
+  };
 }
 
 beforeEach(() => {
@@ -141,7 +146,7 @@ it.each([
   const result = await server.transcribe({
     model,
     language: " en ",
-    query: { language_hint: hint, eot_threshold: 0.7, keyterm, ...formatting },
+    query: { ...(hint ? { language_hint: hint } : {}), eot_threshold: 0.7, keyterm, ...formatting },
     request: {
       allowPrivateNetwork: true,
       auth: { mode: "header", headerName: "authorization", value: "Token configured-key" },

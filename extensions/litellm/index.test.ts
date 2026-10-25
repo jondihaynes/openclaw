@@ -101,7 +101,7 @@ it.each([
   [PROXY_URL, `${PROXY_URL}/models`, "LiteLLM", "https://litellm.example"],
 ] as const)(
   "discovers models from %j at %j (provider %j, canonical URL %j)",
-  async (baseUrl, endpoint, key = "litellm", canonicalBaseUrl?: string) => {
+  async (baseUrl, endpoint, key: "litellm" | "LiteLLM" = "litellm", canonicalBaseUrl?: string) => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) =>
