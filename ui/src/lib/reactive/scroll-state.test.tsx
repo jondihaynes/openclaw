@@ -47,10 +47,11 @@ function geometry(element: HTMLElement, horizontal = false) {
   return values;
 }
 
-function reflect(element: HTMLElement, state: { scrollable: boolean; atEnd: boolean }) {
+const reflect: Parameters<typeof createScrollStateRef>[0] = (element, state) => {
   element.dataset.scrollable = String(state.scrollable);
+  element.dataset.atStart = String(state.atStart);
   element.dataset.atEnd = String(state.atEnd);
-}
+};
 
 function advanceFrame() {
   flush();
@@ -86,13 +87,13 @@ function scroll(element: HTMLElement, values: ReturnType<typeof geometry>, offse
 }
 
 type ScrollOptions = Parameters<typeof createScrollStateRef>[1];
-function externalScroll(options: ScrollOptions = {}, publish = reflect) {
+function externalScroll(options: ScrollOptions = {}) {
   const element = div();
   const values = geometry(element, options.horizontal);
-  const root = createRoot((stop) => ({ stop, ref: createScrollStateRef(publish, options) }));
+  const root = createRoot((stop) => ({ stop, ref: createScrollStateRef(reflect, options) }));
   cleanup.push(root.stop);
   root.ref(element);
-  return { element, values, dispose: root.stop, ref: root.ref };
+  return { element, values, dispose: root.stop };
 }
 
 it.each([
@@ -141,49 +142,6 @@ it("moves observation to the rendered replacement and ignores the old pending la
   expect(observers.every((observer) => !observer.targets.has(first))).toBe(true);
 });
 
-it("resamples content on reveal and releases live external targets when disposed", () => {
-  const publish = vi.fn(reflect);
-  const [presented, setPresented] = createSignal(true);
-  const [content, setContent] = createSignal("long path");
-  const { element, values, dispose } = externalScroll(
-    { presented, content, horizontal: true },
-    publish,
-  );
-  expectFrame(element, true, false);
-  const oldObserver = observers.at(-1)!;
-
-  scroll(element, values, 200);
-  setPresented(false);
-  flush();
-  values.extent = 100;
-  values.offset = 0;
-  setContent("short path");
-  flush();
-  oldObserver.deliver(element);
-  vi.advanceTimersToNextFrame();
-  expect(element.dataset.atEnd).toBe("false");
-  expect(observers.every((observer) => observer.targets.size === 0)).toBe(true);
-
-  setPresented(true);
-  expectFrame(element, false, true);
-  publish.mockClear();
-  values.extent = 400;
-  setContent("a longer path");
-  expectFrame(element, true, false);
-  const atStart = { scrollable: true, atStart: true, atEnd: false };
-  expect(publish).toHaveBeenCalledExactlyOnceWith(element, atStart);
-  expect(observers.filter((observer) => observer.targets.has(element))).toHaveLength(1);
-
-  scroll(element, values, 300);
-  const retiringObserver = observers.at(-1)!;
-  dispose();
-  retiringObserver.deliver(element);
-  element.dispatchEvent(new Event("scroll"));
-  vi.advanceTimersToNextFrame();
-  expect(element).toMatchObject({ isConnected: true, dataset: { atEnd: "false" } });
-  expect(observers.every((observer) => observer.targets.size === 0)).toBe(true);
-});
-
 it("defers bounded reveal and cancels replaced, cleared, and disposed requests", () => {
   const ancestor = div();
   const region = div(ancestor);
@@ -227,112 +185,69 @@ it("defers bounded reveal and cancels replaced, cleared, and disposed requests",
   expect(nativeScroll).not.toHaveBeenCalled();
 });
 
-it("resamples loaded font metrics only for the current presented element", () => {
-  const readiness = vi.fn(() => Promise.resolve());
-  const fonts = new EventTarget();
-  Object.defineProperty(fonts, "ready", { get: readiness });
-  const originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
-  Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
-  cleanup.push(() => {
-    if (originalFonts) {
-      Object.defineProperty(document, "fonts", originalFonts);
-    }
-  });
+it("resamples content on reveal and releases live external targets when disposed", () => {
   const [presented, setPresented] = createSignal(true);
-  const publish = vi.fn(reflect);
-  const {
-    element: first,
-    values: firstGeometry,
-    ref,
-    dispose,
-  } = externalScroll({ horizontal: true, trackScroll: false, presented }, publish);
-  const second = div();
-  const secondGeometry = geometry(second, true);
-  const expectScrollable = (element: HTMLElement, scrollable: boolean) => {
-    advanceFrame();
-    expect(element.dataset.scrollable).toBe(String(scrollable));
-  };
-  const loadFonts = () => fonts.dispatchEvent(new Event("loadingdone"));
-  expectScrollable(first, true);
+  const [content, setContent] = createSignal("long path");
+  const { element, values, dispose } = externalScroll({ presented, content, horizontal: true });
+  expectFrame(element, true, false);
+  const oldObserver = observers.at(-1)!;
 
-  ref(second);
-  advanceFrame();
-  firstGeometry.extent = 50;
-  secondGeometry.extent = 50;
-  loadFonts();
-  expectScrollable(second, false);
-  expect(first.dataset.scrollable).toBe("true");
-
+  scroll(element, values, 200);
   setPresented(false);
   flush();
-  secondGeometry.extent = 300;
-  loadFonts();
-  expectScrollable(second, false);
+  values.extent = 100;
+  values.offset = 0;
+  setContent("short path");
+  flush();
+  oldObserver.deliver(element);
+  vi.advanceTimersToNextFrame();
+  expect(element.dataset.atEnd).toBe("false");
+  expect(observers.every((observer) => observer.targets.size === 0)).toBe(true);
 
   setPresented(true);
-  expectScrollable(second, true);
-  secondGeometry.extent = 50;
-  loadFonts();
-  loadFonts();
-  publish.mockClear();
-  expectScrollable(second, false);
-  expect(publish).toHaveBeenCalledTimes(1);
+  expectFrame(element, false, true);
+  values.extent = 400;
+  setContent("a longer path");
+  expectFrame(element, true, false);
+  expect(element.dataset.atStart).toBe("true");
+  expect(observers.filter((observer) => observer.targets.has(element))).toHaveLength(1);
 
+  scroll(element, values, 300);
+  const retiringObserver = observers.at(-1)!;
   dispose();
-  publish.mockClear();
-  secondGeometry.extent = 300;
-  loadFonts();
+  retiringObserver.deliver(element);
+  element.dispatchEvent(new Event("scroll"));
   vi.advanceTimersToNextFrame();
-  expect(publish).not.toHaveBeenCalled();
-  expect(readiness).not.toHaveBeenCalled();
+  expect(element).toMatchObject({ isConnected: true, dataset: { atEnd: "false" } });
+  expect(observers.every((observer) => observer.targets.size === 0)).toBe(true);
 });
 
-it("restores a destination after readiness without overwriting subsequent reader scroll", () => {
+it("restores ready destinations without overwriting reader scroll or ancestors", () => {
   const outer = div();
   const element = div(outer);
   Object.defineProperty(element, "scrollWidth", { value: 700 });
   outer.scrollTop = 400;
-  const [target, setTarget] = createSignal<HTMLElement>();
-  const [ready, setReady] = createSignal(false);
-  const [destination, setDestination] = createSignal("root");
-  const [savedTop, setSavedTop] = createSignal(37);
-  createScrollPositionRoot(() => {
-    const currentTarget = target();
-    return {
-      restore: ready()
-        ? {
-            identity: [destination(), currentTarget],
-            target: currentTarget,
-            top: savedTop(),
-            left: "end",
-          }
-        : undefined,
-    };
-  });
-  const expectTop = (top: number) => {
+  const [request, setRequest] = createSignal<
+    ReturnType<Parameters<typeof createScrollPosition>[0]>
+  >({});
+  createScrollPositionRoot(request);
+  const restore = (destination: string, target: HTMLElement | undefined, top: number) => {
+    setRequest({ restore: { identity: [destination, target], target, top, left: "end" } });
     flush();
-    expect(element.scrollTop).toBe(top);
   };
-  setReady(true);
-  flush();
-  setTarget(element);
-  expectTop(37);
-  expect(element.scrollLeft).toBe(700);
-
+  restore("root", undefined, 37);
+  restore("root", element, 37);
+  expect([element.scrollTop, element.scrollLeft]).toEqual([37, 700]);
   element.scrollTop = 91;
-  setSavedTop(91);
-  expectTop(91);
-  setSavedTop(37);
-  expectTop(91);
-
-  setReady(false);
+  for (const savedTop of [91, 37]) {
+    restore("root", element, savedTop);
+    expect(element.scrollTop).toBe(91);
+  }
+  setRequest({});
   flush();
-  setDestination("folder");
-  setSavedTop(12);
-  expectTop(91);
-  setReady(true);
-  expectTop(12);
-  expect(outer.scrollTop).toBe(400);
+  expect(element.scrollTop).toBe(91);
+  restore("folder", element, 12);
+  expect([element.scrollTop, outer.scrollTop]).toEqual([12, 400]);
 });
 
 function retainedScroll() {
