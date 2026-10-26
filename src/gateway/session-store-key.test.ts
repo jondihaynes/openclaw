@@ -15,7 +15,7 @@ test("canonicalizes a session key once without folding opaque peer IDs", () => {
     [" Thread-1 ", "agent:ops:thread-1"],
     ["MATRIX:CHANNEL:!AbC:Example.org", "agent:ops:matrix:channel:!AbC:Example.org"],
     ["SIGNAL:GROUP:AbC=", "agent:ops:signal:group:AbC="],
-  ]) {
+  ] as const) {
     expect(canonicalizeSessionKeyForAgent("OPS", raw)).toBe(expected);
   }
 });

@@ -86,8 +86,11 @@ assert.deepEqual(findSkillUsageMatch(skillRequest), {
 const workloads = [
   {
     name: "session-key",
-    run: (index: number) =>
-      canonicalizeSessionKeyForAgent("ops", keys[index % keys.length].input).length,
+    run: (index: number) => {
+      const key = keys[index % keys.length];
+      assert.ok(key);
+      return canonicalizeSessionKeyForAgent("ops", key.input).length;
+    },
     expected: keys.reduce((sum, key) => sum + key.expected.length, 0),
   },
   {
