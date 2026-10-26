@@ -15,7 +15,7 @@ User impact: moving an in-flight card to done or blocked now ends its run the sa
 
 `complete()` and `block()` tear the run down, but every other status writer went straight to `updateCard`, which never did. Owner-slot admission treats a running execution, or a claim on a card that is not done, as busy, so the stale state kept the slot occupied.
 
-Every status writer reaches `updateCard`, so the teardown now runs there. It applies only to a manual transition into done or blocked that would still leave a claim, a running execution, or a running attempt. It reuses the existing `finishRun` teardown.
+Every status writer reaches `updateCard`, so the teardown now runs there. It applies only to a manual transition into done or blocked. When the write ends an active run (a running execution or running attempt), it reuses the existing `finishRun` teardown: release the claim, finish the execution, close attempts, count a failure for blocked, and add the completed/failed notification. When only a stale claim is left after the run already ended, the claim is just released: no notification, failure count untouched, because `updateCard` re-derives the attempt and failure count from the execution and a finished run must not be reported as failed.
 
 - `complete()`, `block()` and `reclaim()` already clear the run before they write, so they never get a second teardown or a second failure count. Tests cover this.
 - Lifecycle-sourced writes (`syncLifecycle`, which carries a fresh `lifecycleStatusSourceUpdatedAt`) are excluded. They keep their own reconciliation (#122911 is not touched).
@@ -27,25 +27,27 @@ Accepted edge case: the dispatcher's retry-exhausted path, which blocks unclaime
 
 ## Evidence
 
-Focused regression tests in `extensions/workboard/src/tools.test.ts` ("workboard terminal status writes"). They run against the real SQLite store, through the dispatch path: claim, then prepare and accept the execution launch.
+Focused regression tests in `extensions/workboard/src/tools.test.ts`. They run against the real SQLite store, through the dispatch path: claim, then prepare and accept the execution launch. Each case catches a distinct failure:
 
-| Test | Base (upstream/main) | This branch |
+| Test | upstream/main | This branch |
 |---|---|---|
-| `workboard_move` to done: claim cleared, execution done, attempt succeeded, completed notification, owner's next card claimable | ❌ | ✅ |
-| `workboard_move` to blocked: same, attempt blocked, `failureCount` 1, failed notification | ❌ | ✅ |
-| `update` to done releases the run | ❌ | ✅ |
-| `reassign` to done releases the run | ❌ | ✅ |
-| Move to review keeps the claim and running execution | ✅ | ✅ |
-| `complete()`: one succeeded attempt, no failure, one notification (no double teardown) | ✅ | ✅ |
-| `block()`: exactly one blocked attempt, `failureCount` 1, one notification | ✅ | ✅ |
-| A blocked card written as blocked again via move/update keeps `failureCount` 1 | ✅ | ✅ |
-| Another owner without the claim token is rejected and the card is unchanged | ✅ | ✅ |
+| `workboard_move` to done / to blocked: claim released, execution finished, attempt closed, failure count and notification match `complete()`/`block()`, owner can claim again | ❌ / ❌ | ✅ / ✅ |
+| `update` to done (Gateway update and bulk) releases the run: proves the fix sits at the shared write boundary, not only in `move()` | ❌ | ✅ |
+| Move to done / to blocked after the run already ended: only the claim is released, no notification, failure count 0 | ❌ / ❌ | ✅ / ✅ |
+| `block()` then blocked writes via move and update: one blocked attempt, failure count 1, one notification (guards against double teardown; fails with failure count 2 if the teardown ran on top of `block()`) | ✅ | ✅ |
+| Existing "moves cards with agent claim scope": now also asserts a review move keeps the claim (guards the review exclusion; fails if review is treated as terminal) | ✅ | ✅ |
+
+The two guards (the last two rows) were checked by deliberate mutation: deciding the teardown from the pre-write card state, and adding review to the terminal set. Each makes its guard fail.
+
+Test cost: `tools.test.ts` goes from 13 tests in 31.3s to 19 tests in 35.3s (`pnpm test extensions/workboard/src/tools.test.ts --maxWorkers=1`, Windows host).
 
 Local gates on Windows 11 with Node 24.22.1:
 - `tsgo` passes for both `tsconfig.extensions.json` and the extension test config.
 - oxlint passes on the changed files.
 - `oxfmt --check` passes.
 - The line-cap ratchet passes.
-- `pnpm test:extension workboard`: 358 passed and 11 failed. The same 11 also fail on unmodified upstream/main on this Windows host (workspace/sandbox path assertions in command, dispatcher, gateway and tools tests, plus an EPERM temp-dir cleanup), so they are pre-existing and platform-specific. PR CI covers Linux.
+- `pnpm test:extension workboard`: 355 passed and 11 failed. The same 11 also fail on unmodified upstream/main on this Windows host (workspace/sandbox path assertions and an EPERM temp-dir cleanup). On Linux the full workboard suite passes.
 
-Gap: I did not complete an isolated-Gateway run on this host. The QA live-lane E2E setup refuses to prepare build artifacts here. Its `live-gateway-dist-fence` cannot verify on Windows that the checkout is separate from the locally installed OpenClaw desktop Gateway task, and I did not bypass the fence. I'm happy to add a redacted mock-openai Gateway trace from a Linux run if reviewers want one.
+Independent review: the OpenClaw `autoreview` skill with the Codex engine (`--mode branch --base upstream/main --max-priority P2 --thinking high`, with `store-card-helpers.ts`, `store-promote.ts` and `store-workflow.ts` as source context) reported scoped-clean, "patch is correct (0.87)".
+
+Gateway proof: an isolated Gateway with the mock-openai QA lane, driving the real `workboard_move` tool through `tools.invoke`. <!-- add the redacted before/after trace from the Linux run here -->
