@@ -95,6 +95,8 @@ export function resolveLifecycleStatusWrite(
  * leave the run active gets the teardown complete() and block() already apply; otherwise the
  * stale claim or running execution keeps holding the owner's dispatch slot. complete(), block()
  * and reclaim() clear their run before writing, so they never reach the teardown twice.
+ * A claim left after its run already ended is only released: updateCard re-derives the attempt
+ * and failure count from the execution, so reporting a finished run as failed would contradict it.
  */
 export function settleManualStatusTransition(params: {
   existing: WorkboardCard;
@@ -109,15 +111,14 @@ export function settleManualStatusTransition(params: {
   // Status patches often spread existing metadata. Only a newly supplied
   // lifecycle source is provenance; copied markers must not survive a manual transition.
   const metadata = { ...params.metadata, lifecycleStatusSourceUpdatedAt: undefined };
-  if (
-    (status !== "done" && status !== "blocked") ||
-    !(
-      metadata.claim ||
-      execution?.status === "running" ||
-      metadata.attempts?.some((attempt) => attempt.status === "running")
-    )
-  ) {
+  if (status !== "done" && status !== "blocked") {
     return { execution, metadata };
+  }
+  const runActive =
+    execution?.status === "running" ||
+    metadata.attempts?.some((attempt) => attempt.status === "running");
+  if (!runActive) {
+    return { execution, metadata: metadata.claim ? { ...metadata, claim: undefined } : metadata };
   }
   const finished = finishRun({ ...existing, execution, metadata }, status, now);
   const notifications = appendCardNotification(

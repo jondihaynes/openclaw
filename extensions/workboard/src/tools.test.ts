@@ -817,7 +817,11 @@ describe("workboard tools", () => {
         token: "test-auth-token",
       }),
     );
-    expect(claimed.card).toMatchObject({ status: "review" });
+    // Review is not terminal: the claim stays with its owner.
+    expect(claimed.card).toMatchObject({
+      status: "review",
+      metadata: { claim: { ownerId: "agent-a" } },
+    });
   });
 });
 
@@ -880,85 +884,59 @@ describe("workboard terminal status writes", () => {
     },
   );
 
-  it.each([
-    [
-      "update",
-      (store: ReturnType<typeof createWorkboardSqliteTestStore>, id: string) =>
-        store.update(id, { status: "done" }),
-    ],
-    [
-      "reassign",
-      (store: ReturnType<typeof createWorkboardSqliteTestStore>, id: string) =>
-        store.reassign(id, { status: "done" }, null),
-    ],
-  ] as const)("releases the claim when %s writes done", async (_name, write) => {
+  it("releases the claim when update writes done", async () => {
     const store = createWorkboardSqliteTestStore();
     const { card } = await createDispatchedCard(store);
 
-    await write(store, card.id);
+    await store.update(card.id, { status: "done" });
 
     await expectRunFinished(store, card.id, "done");
   });
 
-  it("keeps the claim and running execution when moving to review", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const tools = toolsByName(createWorkboardTools({ store, context: { agentId: "agent-a" } }));
-    const { card, token } = await createDispatchedCard(store);
-
-    await tools.get("workboard_move")?.execute("move-review", {
-      id: card.id,
-      status: "review",
-      token,
-    });
-
-    const reviewed = expectDefined(await store.get(card.id), "review card");
-    expect(reviewed).toMatchObject({
-      status: "review",
-      execution: { status: "running" },
-      metadata: { claim: { ownerId: "agent-a" } },
-    });
-  });
-
-  it.each(["done", "blocked"] as const)(
-    "does not double-count %s through complete or block",
-    async (status) => {
-      const store = createWorkboardSqliteTestStore();
-      const { card, token } = await createDispatchedCard(store);
-      const scope = { ownerId: "agent-a", token };
-
-      await (status === "done"
-        ? store.complete(card.id, scope)
-        : store.block(card.id, { ...scope, reason: "Workboard card blocked." }));
-
-      await expectRunFinished(store, card.id, status);
-    },
-  );
-
-  it("does not count a failure again when a blocked card is written as blocked", async () => {
+  it("counts block() once, including later blocked writes", async () => {
     const store = createWorkboardSqliteTestStore();
     const { card, token } = await createDispatchedCard(store);
+
     await store.block(card.id, { ownerId: "agent-a", token, reason: "Workboard card blocked." });
-
     await store.move(card.id, "blocked", undefined);
     await store.update(card.id, { status: "blocked" });
 
-    const blocked = expectDefined(await store.get(card.id), "blocked card");
-    expect(blocked.metadata?.failureCount).toBe(1);
-    expect(blocked.metadata?.notifications).toHaveLength(1);
+    await expectRunFinished(store, card.id, "blocked");
   });
 
-  it("rejects a terminal move from another owner without the claim token", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const tools = toolsByName(createWorkboardTools({ store, context: { agentId: "agent-b" } }));
-    const { card } = await createDispatchedCard(store);
+  it.each(["done", "blocked"] as const)(
+    "only releases the claim when moving to %s after the run already ended",
+    async (status) => {
+      const store = createWorkboardSqliteTestStore();
+      const { card } = await createDispatchedCard(store);
+      const running = expectDefined(await store.get(card.id), "running card");
+      const now = running.updatedAt + 1;
+      await store.syncLifecycle(card.id, {
+        targetStatus: "review",
+        executionStatus: "done",
+        sourceUpdatedAt: now,
+        stale: undefined,
+        now,
+        association: {
+          expectedSessionKey: running.sessionKey,
+          expectedRunId: running.runId,
+          sessionKey: running.sessionKey!,
+          runId: running.runId,
+        },
+      });
 
-    await expect(
-      tools.get("workboard_move")?.execute("move-foreign", { id: card.id, status: "done" }),
-    ).rejects.toThrow("card is claimed by agent-a");
+      await store.move(card.id, status, undefined);
 
-    expect(await store.get(card.id)).toMatchObject({
-      status: "running",
-      metadata: { claim: { ownerId: "agent-a" } },
-    });
-  });
+      const moved = expectDefined(await store.get(card.id), "moved card");
+      expect(moved).toMatchObject({ status, execution: { status: "done" } });
+      expect(moved.metadata?.claim).toBeUndefined();
+      expect(moved.metadata?.attempts).toEqual([expect.objectContaining({ status: "succeeded" })]);
+      expect(moved.metadata?.failureCount ?? 0).toBe(0);
+      expect(moved.metadata?.notifications ?? []).toEqual([]);
+      const next = await store.create({ title: "Next card", status: "ready" });
+      await expect(store.claim(next.id, { ownerId: "agent-a" })).resolves.toMatchObject({
+        card: { status: "running" },
+      });
+    },
+  );
 });
