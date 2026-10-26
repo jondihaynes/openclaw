@@ -286,10 +286,10 @@ it("preserves exact frame-budget batch boundaries for UTF-8, escapes and images"
     return seed;
   };
   const alphabet = ["a", "é", "🦞", '"', "\\", "\n", "\u0000", "\ud800"];
-  for (let trial = 0; trial < 16; trial++) {
+  for (const character of alphabet) {
     fixtures.push(
       Array.from({ length: 70 }, (_, index) => {
-        const text = alphabet[(random() >>> 16) % alphabet.length].repeat(100 + (random() % 1400));
+        const text = character.repeat(100 + (random() % 1400));
         return index % 2 === 0
           ? userMessage(text)
           : {
