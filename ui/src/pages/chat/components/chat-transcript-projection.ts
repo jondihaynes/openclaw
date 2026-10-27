@@ -34,13 +34,13 @@ import {
   resolveTranscriptAvatarPlacement,
   resolveTranscriptParticipants,
 } from "./chat-transcript-identity.ts";
-import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import {
   expandReplyTargetWork,
   projectTranscriptChain,
   projectTranscriptIndex,
   projectTranscriptRows,
+  type PlacedContentRow,
 } from "./chat-transcript-message-index.ts";
 import { projectTranscriptRecovery } from "./chat-transcript-recovery.ts";
 import {
@@ -64,6 +64,7 @@ export function projectChatTranscript(
   search = getTranscriptState(props.paneId).search.snapshot,
 ) {
   const state = getTranscriptState(props.paneId);
+  const realtimeConversation = projectRealtimeTalkConversation(props);
   const { asyncQuestions, selectedSession: activeSession } = props;
   const asyncQuestionGeneration = state.asyncQuestionGeneration;
   const { showOwnSenderName, replyPeople } = resolveTranscriptParticipants(props);
@@ -199,9 +200,10 @@ export function projectChatTranscript(
       !(expanded ?? expandedToolCards.get(toolCardId) ?? false),
     );
   };
-  const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
-  const hasLiveContent = Boolean(subagents.wait || hasTypingActors || hasRealtimeTalkConversation);
+  const hasLiveContent = Boolean(
+    subagents.wait || hasTypingActors || realtimeConversation.hasEntries(),
+  );
   // An empty page is not an empty conversation. Keep the transcript mounted
   // while older history exists so the reader can request the next page.
   const isEmpty =
@@ -215,7 +217,10 @@ export function projectChatTranscript(
   const presented =
     typeof props.presented === "object" ? props.presented.isPresented() : (props.presented ?? true);
   const threadContextWindow =
-    activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
+    props.transcriptMetadata?.contextTokens ??
+    activeSession?.contextTokens ??
+    props.sessions?.defaults?.contextTokens ??
+    null;
   const resolvedRecap = resolveTurnRecap(state, {
     sessionKey: props.sessionKey,
     agentId: props.currentAgentId,
@@ -610,16 +615,20 @@ export function projectChatTranscript(
   );
   transcript.entryAnimations.project(chatItems);
   transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
-  const contentRows: Extract<TranscriptRow, { kind: "content" }>[] = [];
-  const appendContent = (key: string, content: NativeTranscriptView) =>
+  const contentRows: PlacedContentRow[] = [];
+  const appendContent = (key: string, content: NativeTranscriptView, after?: string | null) =>
     contentRows.push({
       kind: "content",
       key,
       content: new GuardedTranscriptItem([content], content),
+      after,
     });
-  const realtimeConversation = projectRealtimeTalkConversation(props);
-  if (realtimeConversation) {
-    appendContent("realtime-talk", { kind: "realtime", ...realtimeConversation });
+  for (const { afterMessageId, content } of realtimeConversation.blocks()) {
+    appendContent(
+      afterMessageId === undefined ? "realtime-talk" : `realtime-talk:${afterMessageId ?? ""}`,
+      content,
+      afterMessageId ? messageRowKeysById.get(afterMessageId) : afterMessageId,
+    );
   }
   if (turnRecap !== null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
     appendContent("turn-recap", { kind: "recap", recap: turnRecap });
