@@ -89,15 +89,8 @@ export function resolveLifecycleStatusWrite(
   return { effectivePatch, hasFreshLifecycleStatusSource };
 }
 
-/**
- * Settles a manual (not lifecycle-sourced) status change. Every status writer (move, update,
- * bulk, reassign, release) reaches updateCard, so a transition to done or blocked that would
- * leave the run active gets the teardown complete() and block() already apply; otherwise the
- * stale claim or running execution keeps holding the owner's dispatch slot. complete(), block()
- * and reclaim() clear their run before writing, so they never reach the teardown twice.
- * A claim left after its run already ended is only released: updateCard re-derives the attempt
- * and failure count from the execution, so reporting a finished run as failed would contradict it.
- */
+// Manual terminal writes share complete/block teardown. Already-ended runs only release
+// their stale claim, without counting another failure or emitting another notification.
 export function settleManualStatusTransition(params: {
   existing: WorkboardCard;
   status: WorkboardStatus;
