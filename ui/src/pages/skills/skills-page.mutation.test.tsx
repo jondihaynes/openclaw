@@ -335,3 +335,30 @@ describe("Skills mutation presentation", () => {
     },
   );
 });
+
+describe("Skills page after a Gateway config reload", () => {
+  const changed = {
+    type: "event" as const,
+    event: "skills.changed",
+    payload: { reason: "config-change" },
+  };
+
+  it("reads the inventory again when skills.changed arrives during a read", async () => {
+    const firstRead = deferred<unknown>();
+    const statusReads = () => request.mock.calls.filter(([method]) => method === "skills.status");
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.status") {
+        return statusReads().length === 1 ? firstRead.promise : createReport();
+      }
+      return method === "skills.library.list" ? personalLibrary : { results: [] };
+    });
+    const { connection } = mountSkills(request, "settings");
+    connection.publishEvent(changed);
+    await waitForFast(() => expect(statusReads()).toHaveLength(1));
+    // The first read can predate the config reload, so a second event during it must not be lost.
+    connection.publishEvent(changed);
+    expect(statusReads()).toHaveLength(1);
+    firstRead.resolve(createReport());
+    await waitForFast(() => expect(statusReads()).toHaveLength(2));
+  });
+});
