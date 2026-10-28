@@ -238,11 +238,26 @@ describe("config raw editing and redaction", () => {
     expect(revealButton.getAttribute("aria-pressed")).toBe("false");
     revealButton.click();
 
+    expect(text(container, ".config-raw-field .settings-count")).toBe("1 secret visible");
     const textarea = element(container, "textarea", HTMLTextAreaElement);
     expect(textarea.value).toBe('{\n  "openai": { "apiKey": "supersecret" }\n}\n');
     textarea.value = textarea.value.replace("supersecret", "updatedsecret");
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onRawChange).toHaveBeenCalledWith(textarea.value);
+  });
+
+  it("keeps the redacted label after reveal while the raw text holds the redaction sentinel", () => {
+    const raw = '{\n  "openai": { "apiKey": "__OPENCLAW_REDACTED__" }\n}\n';
+    const { container } = setup({
+      raw,
+      originalRaw: raw,
+      formValue: { openai: { apiKey: "__OPENCLAW_REDACTED__" } },
+    });
+
+    element(container, ".config-raw-toggle", HTMLButtonElement).click();
+
+    expect(element(container, "textarea", HTMLTextAreaElement).value).toBe(raw);
+    expect(text(container, ".config-raw-field .settings-count")).toBe("1 secret redacted");
   });
 
   it("opens raw pending changes without sending a fake raw edit", () => {
