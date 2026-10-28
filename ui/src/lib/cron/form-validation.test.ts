@@ -43,6 +43,27 @@ describe("cron form validation", () => {
     },
   );
 
+  it.each([
+    ["bad", "", "cronExpr", "cron.errors.cronExprInvalid"],
+    ["0 7 * * *", "Mars/Phobos", "cronTz", "cron.errors.cronTzInvalid"],
+    ["0 7 * * *", "America/New_York", undefined, undefined],
+    ["0 0 7 * * *", "", undefined, undefined],
+  ] as const)(
+    "checks cron schedule %s in %s against croner",
+    (cronExpr, cronTz, field, message) => {
+      const errors = validateCronForm({
+        ...DEFAULT_CRON_FORM,
+        name: "job",
+        scheduleKind: "cron",
+        cronExpr,
+        cronTz,
+        payloadText: "hi",
+      });
+      expect(errors.cronExpr).toBe(field === "cronExpr" ? message : undefined);
+      expect(errors.cronTz).toBe(field === "cronTz" ? message : undefined);
+    },
+  );
+
   it("validates key cron form errors", () => {
     const errors = validateCronForm({
       ...DEFAULT_CRON_FORM,

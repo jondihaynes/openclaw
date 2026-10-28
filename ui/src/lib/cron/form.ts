@@ -1,4 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { Cron } from "croner";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
 import { hasCanonicalCronDeliveryMode } from "../../../../src/cron/store/delivery-codec.js";
 import type { CronJob, CronPayload } from "../../api/types.ts";
@@ -50,6 +51,29 @@ export function normalizeCronFormState(
   };
 }
 
+function parsesAsCron(expr: string, timezone?: string): boolean {
+  try {
+    // Croner validates the timezone lazily, on the first run lookup.
+    new Cron(expr, { timezone: timezone || undefined, catch: false }).nextRun();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Mirrors the scheduler's croner rules so the form rejects what cron.add would.
+function resolveCronScheduleError(
+  expr: string,
+  timezone: string,
+): { field: "cronExpr" | "cronTz"; message: string } | undefined {
+  if (parsesAsCron(expr, timezone)) {
+    return undefined;
+  }
+  return parsesAsCron(expr)
+    ? { field: "cronTz", message: "cron.errors.cronTzInvalid" }
+    : { field: "cronExpr", message: "cron.errors.cronExprInvalid" };
+}
+
 export function validateCronForm(form: CronFormState): CronFieldErrors {
   const errors: CronFieldErrors = {};
   if (!form.name.trim()) {
@@ -82,6 +106,11 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
   } else if (form.scheduleKind === "cron") {
     if (!form.cronExpr.trim()) {
       errors.cronExpr = "cron.errors.cronExprRequired";
+    } else {
+      const cronError = resolveCronScheduleError(form.cronExpr.trim(), form.cronTz.trim());
+      if (cronError) {
+        errors[cronError.field] = cronError.message;
+      }
     }
     if (!form.scheduleExact) {
       const staggerAmount = form.staggerAmount.trim();
