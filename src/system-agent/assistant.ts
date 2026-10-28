@@ -176,6 +176,8 @@ async function runConfiguredSystemAgentText(params: {
       messageProvider: "openclaw",
       disableTools: true,
       disableTrajectory: true,
+      // The owner supplies runtime policy only. Its workspace persona files belong to the owner, not OpenClaw.
+      bootstrapContextMode: "lightweight" as const,
       ...(responseFormat ? { streamParams: { responseFormat } } : {}),
       ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };

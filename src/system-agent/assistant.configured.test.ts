@@ -437,6 +437,7 @@ describe("OpenClaw configured-model planner", () => {
         disableTools: true,
         workspaceDir: "/tmp/openclaw-planner",
         cwd: "/tmp/openclaw-planner",
+        bootstrapContextMode: "lightweight",
         cleanupCliLiveSessionOnRunEnd: true,
       }),
     );
@@ -510,6 +511,7 @@ describe("OpenClaw configured-model planner", () => {
         },
         disableTools: true,
         disableTrajectory: true,
+        bootstrapContextMode: "lightweight",
         toolsAllow: [],
         thinkLevel: "off",
         timeoutMs: 120_000,
