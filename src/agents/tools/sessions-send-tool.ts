@@ -77,6 +77,7 @@ import {
   resolveConfiguredAgentMainSessionKey,
 } from "./sessions-send-tool.delivery.js";
 import {
+  formatUnknownAgentError,
   readSessionsSendMessage,
   readSessionsSendMode,
   readSessionsSendTarget,
@@ -136,7 +137,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       }
       const { readTarget: readSession, readRequester } = createSessionsSendSessionReaders(cfg);
 
-      const targetInput = readSessionsSendTarget(params);
+      const sendScope = { cfg, requesterAgentId, restrictToSpawned, a2aPolicy };
+      const targetInput = readSessionsSendTarget(params, sendScope);
       if (!targetInput.ok) {
         return sendFailure("error", targetInput.error);
       }
@@ -152,10 +154,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           mainKey,
         });
         if (!agentMainKey) {
-          return sendFailure(
-            "error",
-            `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
-          );
+          return sendFailure("error", formatUnknownAgentError(sendScope, labelAgentIdInput));
         }
         sessionKey = agentMainKey;
       }

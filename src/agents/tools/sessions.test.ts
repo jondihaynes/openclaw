@@ -386,6 +386,31 @@ describe("sessions_send gating", () => {
   });
 
   it.each([
+    { names: ["Nova"], a2a: true, hint: ' Did you mean agent id "nova-1" (Nova)?' },
+    { names: ["Ника"], a2a: true, hint: ' Did you mean agent id "nova-1" (Ника)?' },
+    { names: ["Nova", "nova"], a2a: true, hint: "" },
+    { names: ["Nova"], a2a: false, hint: "" },
+  ])("suggests a sendable agent id for display name $names", async ({ names, a2a, hint }) => {
+    const entries = Object.fromEntries(
+      names.map((name, index) => [`nova-${index + 1}`, { identity: { name } }]),
+    );
+    const tool = createMainSessionsSendTool({
+      callGateway: callGatewayMock,
+      config: {
+        ...createAllSessionsConfig({}, a2a),
+        agents: { ownership: "explicit", entries: { main: {}, ...entries } },
+      },
+    });
+    const agentId = names[0];
+
+    expect(await sendDetails({ agentId, timeoutSeconds: 5 }, tool)).toMatchObject({
+      status: "error",
+      error: `Agent "${agentId}" not found.${hint} Run openclaw agents list to see configured agents.`,
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
     { params: { message: " \n\t " }, error: "message required" },
     { params: { timeoutSeconds: "1sec" }, error: "timeoutSeconds must be a non-negative integer" },
   ])("rejects malformed send input $params before forwarding", async ({ params, error }) => {
