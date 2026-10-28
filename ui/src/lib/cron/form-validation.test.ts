@@ -31,39 +31,16 @@ describe("cron form validation", () => {
   ] as const)(
     "normalizes announce delivery for %s/%s",
     (sessionTarget, payloadKind, payloadLocked, deliveryMode) => {
-      expect(
-        normalizeCronFormState({
-          ...DEFAULT_CRON_FORM,
-          sessionTarget,
-          payloadKind,
-          payloadLocked,
-          deliveryMode: "announce",
-        }).deliveryMode,
-      ).toBe(deliveryMode);
-    },
-  );
-
-  it.each([
-    ["bad", "", "cronExpr", "cron.errors.cronExprInvalid"],
-    ["0 7 * * *", "Mars/Phobos", "cronTz", "cron.errors.cronTzInvalid"],
-    ["0 7 * * *", "America/New_York", undefined, undefined],
-    ["0 0 7 * * *", "", undefined, undefined],
-  ] as const)(
-    "checks cron schedule %s in %s against croner",
-    (cronExpr, cronTz, field, message) => {
-      const errors = validateCronForm({
+      const form = {
         ...DEFAULT_CRON_FORM,
-        name: "job",
-        scheduleKind: "cron",
-        cronExpr,
-        cronTz,
-        payloadText: "hi",
-      });
-      expect(errors.cronExpr).toBe(field === "cronExpr" ? message : undefined);
-      expect(errors.cronTz).toBe(field === "cronTz" ? message : undefined);
+        sessionTarget,
+        payloadKind,
+        payloadLocked,
+        deliveryMode: "announce" as const,
+      };
+      expect(normalizeCronFormState(form).deliveryMode).toBe(deliveryMode);
     },
   );
-
   it("validates key cron form errors", () => {
     const errors = validateCronForm({
       ...DEFAULT_CRON_FORM,

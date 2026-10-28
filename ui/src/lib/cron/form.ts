@@ -61,19 +61,6 @@ function parsesAsCron(expr: string, timezone?: string): boolean {
   }
 }
 
-// Mirrors the scheduler's croner rules so the form rejects what cron.add would.
-function resolveCronScheduleError(
-  expr: string,
-  timezone: string,
-): { field: "cronExpr" | "cronTz"; message: string } | undefined {
-  if (parsesAsCron(expr, timezone)) {
-    return undefined;
-  }
-  return parsesAsCron(expr)
-    ? { field: "cronTz", message: "cron.errors.cronTzInvalid" }
-    : { field: "cronExpr", message: "cron.errors.cronExprInvalid" };
-}
-
 export function validateCronForm(form: CronFormState): CronFieldErrors {
   const errors: CronFieldErrors = {};
   if (!form.name.trim()) {
@@ -104,12 +91,14 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.everyAmount = "cron.errors.triggerIntervalTooShort";
     }
   } else if (form.scheduleKind === "cron") {
-    if (!form.cronExpr.trim()) {
+    const cronExpr = form.cronExpr.trim();
+    if (!cronExpr) {
       errors.cronExpr = "cron.errors.cronExprRequired";
-    } else {
-      const cronError = resolveCronScheduleError(form.cronExpr.trim(), form.cronTz.trim());
-      if (cronError) {
-        errors[cronError.field] = cronError.message;
+    } else if (!parsesAsCron(cronExpr, form.cronTz.trim())) {
+      if (parsesAsCron(cronExpr)) {
+        errors.cronTz = "cron.errors.cronTzInvalid";
+      } else {
+        errors.cronExpr = "cron.errors.cronExprInvalid";
       }
     }
     if (!form.scheduleExact) {
