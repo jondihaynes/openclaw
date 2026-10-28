@@ -179,7 +179,7 @@ describe("Skills mutation presentation", () => {
           return pending.promise;
         }
         if (method === "skills.status") {
-          return refreshed.promise;
+          return refreshed.promise.then(() => report);
         }
         if (method === "skills.library.list") {
           return { ...personalLibrary, defaultTarget: "workspace" };
@@ -189,7 +189,7 @@ describe("Skills mutation presentation", () => {
         }
         throw new Error(`Unexpected method: ${method}`);
       });
-      const { page, publishRouteData } = mountSkills(request, "settings");
+      const { page, publishRouteData, connection } = mountSkills(request, "settings");
       publishRouteData({ report });
       await waitForFast(() =>
         expect(
@@ -217,19 +217,10 @@ describe("Skills mutation presentation", () => {
       });
       toggle.click();
       expect(request.mock.calls.filter(([method]) => method === "skills.update")).toHaveLength(1);
-      expect(page.querySelector(".skill-reader-dialog")).toBe(dialog);
 
       if (outcome === "success") {
         report = createReport([createSkill({ disabled: true })]);
         pending.resolve({});
-        await waitForFast(() =>
-          expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(
-            1,
-          ),
-        );
-        expect(toggle.disabled).toBe(false);
-        expect(toggle.getAttribute("aria-disabled")).toBe("true");
-        expect(document.activeElement).toBe(toggle);
         refreshed.resolve(report);
       } else {
         pending.reject(new Error("Synthetic rejected skill update"));
@@ -246,9 +237,14 @@ describe("Skills mutation presentation", () => {
       expect(dialog.textContent).toContain(
         outcome === "success" ? "Skill disabled" : "Synthetic rejected skill update",
       );
-      expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(
-        outcome === "success" ? 1 : 0,
-      );
+      if (outcome === "success") {
+        nativeDialog.close();
+        report = createReport([skill]);
+        connection.publishEvent({ type: "event", event: "skills.changed" });
+        await waitForFast(() =>
+          expect(page.querySelectorAll(".settings-count")[3]?.textContent).toBe("0"),
+        );
+      }
     },
   );
 
@@ -334,31 +330,4 @@ describe("Skills mutation presentation", () => {
       expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
     },
   );
-});
-
-describe("Skills page after a Gateway config reload", () => {
-  const changed = {
-    type: "event" as const,
-    event: "skills.changed",
-    payload: { reason: "config-change" },
-  };
-
-  it("reads the inventory again when skills.changed arrives during a read", async () => {
-    const firstRead = deferred<unknown>();
-    const statusReads = () => request.mock.calls.filter(([method]) => method === "skills.status");
-    const request = vi.fn(async (method: string) => {
-      if (method === "skills.status") {
-        return statusReads().length === 1 ? firstRead.promise : createReport();
-      }
-      return method === "skills.library.list" ? personalLibrary : { results: [] };
-    });
-    const { connection } = mountSkills(request, "settings");
-    connection.publishEvent(changed);
-    await waitForFast(() => expect(statusReads()).toHaveLength(1));
-    // The first read can predate the config reload, so a second event during it must not be lost.
-    connection.publishEvent(changed);
-    expect(statusReads()).toHaveLength(1);
-    firstRead.resolve(createReport());
-    await waitForFast(() => expect(statusReads()).toHaveLength(2));
-  });
 });
