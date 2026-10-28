@@ -472,8 +472,8 @@ describe("OpenClaw configured-model planner", () => {
     };
     let bootstrap: Awaited<ReturnType<typeof resolveBootstrapContextForRun>> | undefined;
     const runEmbeddedAgent = vi.fn(async (params: RunEmbeddedAgentParams) => {
-      const runConfig = expectDefined(params.config);
-      const agentId = expectDefined(params.agentId);
+      const runConfig = expectDefined(params.config, "planner run config");
+      const agentId = expectDefined(params.agentId, "planner owner agent");
       bootstrap = await resolveBootstrapContextForRun({
         config: runConfig,
         agentId,
