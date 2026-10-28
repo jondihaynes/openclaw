@@ -20,13 +20,13 @@ import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { MODEL_CONTEXT_PRIVATE_METADATA_KEYS } from "../../shared/model-context-message.js";
+import { projectSessionModelContextEntry } from "./session-model-context-entry.js";
 import {
   MODEL_CONTEXT_NAVIGATION_KEYS,
   MODEL_MESSAGE_NAVIGATION_KEYS,
   TRANSCRIPT_NAVIGATION_KEYS,
   projectSessionModelContextNavigation,
 } from "./session-model-context-navigation.js";
-import { projectSessionModelContextEntry } from "./session-model-context-read.js";
 
 const registeredDeepProjectors = new WeakSet<DatabaseSync>();
 

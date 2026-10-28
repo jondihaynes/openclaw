@@ -11,7 +11,10 @@ import { applySessionEntryCanonicalReplacements } from "../config/sessions/sessi
 import type { SessionEntry } from "../config/sessions/types.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore as createDeferred } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
@@ -60,6 +63,7 @@ function expectNoPublication(context: ReturnType<typeof observingContext>) {
 
 afterEach(async () => {
   await disposeSessionReadContexts();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -280,25 +284,21 @@ test.each([
 
 test("sessions.patch keeps explicit unread markers strictly advancing", async () => {
   const { read, patch } = await seedSession("agent:main:conditional-unread-revision");
-  const now = vi.spyOn(Date, "now").mockReturnValue(100);
+  using _ = vi.spyOn(Date, "now").mockReturnValue(100);
 
-  try {
-    await patch({ unread: true });
-    const firstMarker = read()?.markedUnreadAt;
-    await patch({ unread: true });
-    const secondMarker = read()?.markedUnreadAt;
+  await patch({ unread: true });
+  const firstMarker = read()?.markedUnreadAt;
+  await patch({ unread: true });
+  const secondMarker = read()?.markedUnreadAt;
 
-    expect(firstMarker).toBe(100);
-    expect(secondMarker).toBe(101);
-    const staleRead = await patch({
-      unread: false,
-      expectedMarkedUnreadAt: firstMarker,
-    });
-    expect(staleRead).toMatchObject({ ok: true });
-    expect(read()?.markedUnreadAt).toBe(secondMarker);
-  } finally {
-    now.mockRestore();
-  }
+  expect(firstMarker).toBe(100);
+  expect(secondMarker).toBe(101);
+  const staleRead = await patch({
+    unread: false,
+    expectedMarkedUnreadAt: firstMarker,
+  });
+  expect(staleRead).toMatchObject({ ok: true });
+  expect(read()?.markedUnreadAt).toBe(secondMarker);
 });
 
 test("sessions.patchMany preserves a manual unread marker set after the acknowledgement snapshot", async () => {

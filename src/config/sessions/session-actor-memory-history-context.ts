@@ -11,11 +11,9 @@ import type {
   SessionTranscriptModelContext,
   SessionTranscriptContextSnapshot,
 } from "./session-history-read.types.js";
+import { projectSessionModelContextEntry } from "./session-model-context-entry.js";
 import { projectSessionModelContextNavigation } from "./session-model-context-navigation.js";
-import {
-  projectSessionModelContext,
-  projectSessionModelContextEntry,
-} from "./session-model-context-read.js";
+import { projectSessionModelContext } from "./session-model-context-read.js";
 import type { ContextEntry, ModelContextRequest } from "./session-model-context-window.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
