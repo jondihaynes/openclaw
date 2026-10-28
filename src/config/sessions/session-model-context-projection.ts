@@ -122,12 +122,13 @@ export function projectTranscriptPayloadNavigationSql(
     WHERE root_member.key IN (${sql.join([...MODEL_CONTEXT_NAVIGATION_KEYS, "message"])}))`;
 }
 
-/** Cursor resolution needs only tree facts, even when a row has an opaque body. */
+/** Deep identity rows stay readable when SQLite cannot project their tree facts. */
 export function projectTranscriptNavigationSql(
   db: EngineConnection,
   event: Expression<string>,
 ): RawBuilder<string> {
-  return jsonPickObject(db, event, TRANSCRIPT_NAVIGATION_KEYS);
+  return /* kysely-allow-raw: Let the JS tree reader decode deep or malformed identity rows. */ sql<string>`CASE WHEN ${jsonValid(db, event)}
+    THEN ${jsonPickObject(db, event, TRANSCRIPT_NAVIGATION_KEYS)} ELSE ${event} END`;
 }
 
 /** Reset boundaries select ancestry and replay roles without loading message bodies. */

@@ -1,67 +1,40 @@
-import path from "node:path";
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import assert from "node:assert/strict";
+import { expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import {
-  loadTranscriptEvents,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
-import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { sessionScope } from "./session-manager-fixtures.test-support.js";
+import { assistantText, withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    for (const dir of tempDirs.dirs) {
-      await closeOpenClawAgentDatabasesAsync(dir);
-      closeOpenClawAgentDatabasesForTest(dir);
-    }
-    cleanup();
-  }),
-);
+it("preserves deep tool details and append parents across reopening", () =>
+  withSessionState("deep-details", async ({ scope, state }) => {
+    const manager = guardSessionManager(
+      await SessionManager.openAsync(scope, state.workspaceDir),
+      {},
+    );
+    await manager.appendMessageAsync(makeUserMessage("run it", 1));
+    await manager.appendMessageAsync({
+      ...assistantText(""),
+      content: [{ type: "toolCall", id: "call-1", name: "probe", arguments: {} }],
+      stopReason: "toolUse",
+    });
+    // Valid canonical JSON can exceed SQLite JSON1's 1,000-level nesting limit.
+    const details: unknown = JSON.parse(`${"[".repeat(1100)}1${"]".repeat(1100)}`);
+    const toolId = await manager.appendMessageAsync({
+      ...makeTextToolResult("call-1", "probe", "done", false, 3),
+      details,
+    });
+    const nextId = await manager.appendMessageAsync(makeUserMessage("next turn", 4));
+    assert(toolId && nextId);
+    expect(manager.getEntry(nextId)?.parentId).toBe(toolId);
 
-function nestedArray(depth: number): unknown {
-  let value: unknown = [1];
-  for (let level = 0; level < depth; level++) {
-    value = [value];
-  }
-  return value;
-}
-
-it("keeps a session appendable after a tool result with deeply nested details", async () => {
-  const dir = tempDirs.make("openclaw-session-deep-values-");
-  const scope = sessionScope(path.join(dir, "sessions.json"), "deep-details");
-  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  const manager = guardSessionManager(SessionManager.open(scope, { cwd: dir }), {});
-
-  manager.appendMessage(makeUserMessage("run it", 1));
-  manager.appendMessage({
-    role: "assistant",
-    content: [{ type: "toolCall", id: "call-1", name: "probe", arguments: {} }],
-    api: "messages",
-    provider: "anthropic",
-    model: "sonnet-4.6",
-    usage: createZeroUsageFixture(),
-    stopReason: "toolUse",
-    timestamp: 2,
-  });
-  // SQLite JSON functions reject documents nested deeper than 1000 levels.
-  manager.appendMessage({
-    role: "toolResult",
-    toolCallId: "call-1",
-    toolName: "probe",
-    content: [{ type: "text", text: "done" }],
-    details: nestedArray(1100),
-    isError: false,
-    timestamp: 3,
-  });
-
-  expect(() => manager.appendMessage(makeUserMessage("next turn", 4))).not.toThrow();
-  const events = await loadTranscriptEvents(scope);
-  expect(events.at(-1)).toMatchObject({ message: { role: "user", content: "next turn" } });
-});
+    await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
+    const reopened = await SessionManager.openAsync(scope, state.workspaceDir);
+    const afterRestart = await reopened.appendMessageAsync(makeUserMessage("after reopen", 5));
+    assert(afterRestart);
+    expect(reopened.getEntry(afterRestart)?.parentId).toBe(nextId);
+    const stored = reopened.getEntry(toolId);
+    assert(stored?.type === "message" && stored.message.role === "toolResult");
+    expect(JSON.stringify(stored.message.details)).toBe(JSON.stringify(details));
+  }));
