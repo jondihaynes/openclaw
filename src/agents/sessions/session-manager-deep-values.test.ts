@@ -28,6 +28,10 @@ it("preserves deep tool details and append parents across reopening", () =>
     const nextId = await manager.appendMessageAsync(makeUserMessage("next turn", 4));
     assert(toolId && nextId);
     expect(manager.getEntry(nextId)?.parentId).toBe(toolId);
+    const context = await SessionManager.openModelContextAsync(scope, {
+      limits: { maxBytes: 2048, maxEvents: 8 },
+    });
+    expect(context.buildSessionContext().messages).toHaveLength(4);
 
     await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     const reopened = await SessionManager.openAsync(scope, state.workspaceDir);

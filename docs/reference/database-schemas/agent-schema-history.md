@@ -411,6 +411,8 @@ original text. Tree navigation keeps its native SQL projection for supported
 rows and decodes identity JSON in JavaScript when it exceeds SQLite's nesting
 limit. Actor hydration retains only the resulting navigation fields. Deep tool
 details and opaque custom entries remain unchanged, including existing rows.
+Model-context reads use the shared JavaScript projection for deep identity rows,
+including projected byte accounting; ordinary and compressed rows stay native.
 No extension or new
 SQLite file format is required. A runtime without Zstd can write identity rows,
 but refuses to decode an existing compressed row.
