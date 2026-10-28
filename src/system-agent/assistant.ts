@@ -155,7 +155,6 @@ async function runConfiguredSystemAgentText(params: {
     );
     const shared = {
       sessionId: `${runId}-session`,
-      // OpenClaw is the planner surface, but the configured roster owner supplies runtime policy.
       agentId: route.agentId,
       trigger: "manual" as const,
       sessionFile: `in-memory:${runId}`,
@@ -176,7 +175,6 @@ async function runConfiguredSystemAgentText(params: {
       messageProvider: "openclaw",
       disableTools: true,
       disableTrajectory: true,
-      // The owner supplies runtime policy only. Its workspace persona files belong to the owner, not OpenClaw.
       bootstrapContextMode: "lightweight" as const,
       ...(responseFormat ? { streamParams: { responseFormat } } : {}),
       ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
