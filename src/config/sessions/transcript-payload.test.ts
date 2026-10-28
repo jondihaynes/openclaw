@@ -484,9 +484,7 @@ describe("transcript payload storage boundary", () => {
         ',"content":[{"type":"text","text":"visible"}],"details":{"receipt":true},"__openclaw":{"upstreamUserText":"private"},"providerReplay":{"type":"checkpoint","data":"opaque"}';
       const original = `{"type":"message","data":"${"payload ".repeat(1024)}",${envelope.replaceAll("}", `${fields}}`)}}`;
       const prepared = prepareTranscriptPayload(database, original);
-      expect(prepared.event_zstd !== null).toBe(
-        !envelope.includes("scalar") && !envelope.includes("42"),
-      );
+      expect(prepared.event_zstd).not.toBeNull();
       insert(database, 0, {
         event_json: original,
         event_zstd: null,
