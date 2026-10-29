@@ -114,6 +114,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         return sendFailure("forbidden", "Task resume requires an admitted parent tool caller.");
       }
       const timeoutSeconds = readSessionsSendTimeout(params, mode);
+      const context = resolveSessionToolContext(opts);
       const {
         cfg,
         mainKey,
@@ -123,7 +124,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         restrictToSpawned,
         sessionVisibility,
         a2aPolicy,
-      } = resolveSessionToolContext(opts);
+      } = context;
       const readConfig = createRuntimeConfigReader(cfg);
       let requesterAgentId: string;
       try {
@@ -137,7 +138,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       }
       const { readTarget: readSession, readRequester } = createSessionsSendSessionReaders(cfg);
 
-      const sendScope = { cfg, requesterAgentId, restrictToSpawned, a2aPolicy };
+      const sendScope = { ...context, requesterAgentId };
       const targetInput = readSessionsSendTarget(params, sendScope);
       if (!targetInput.ok) {
         return sendFailure("error", targetInput.error);

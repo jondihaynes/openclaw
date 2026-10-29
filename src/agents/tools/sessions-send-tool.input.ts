@@ -1,29 +1,41 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AgentToAgentPolicy } from "../../plugin-sdk/session-visibility.js";
+import { createSessionVisibilityRowChecker } from "../../plugin-sdk/session-visibility.js";
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import { describeAgentIdForName } from "../identity.js";
 import { ToolInputError } from "../tool-input-error.js";
 import { readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
+import type { resolveSessionToolContext } from "./sessions-helpers.js";
+import { resolveConfiguredAgentMainSessionKey } from "./sessions-send-tool.delivery.js";
 
 /** Who is sending; an unknown-agent hint only names agents this requester may send to. */
-type SendTargetScope = {
-  cfg: OpenClawConfig;
-  requesterAgentId: string;
-  restrictToSpawned: boolean;
-  a2aPolicy: AgentToAgentPolicy;
-};
+type SendTargetScope = Pick<
+  ReturnType<typeof resolveSessionToolContext>,
+  | "cfg"
+  | "mainKey"
+  | "effectiveRequesterKey"
+  | "mainSessionKey"
+  | "restrictToSpawned"
+  | "sessionVisibility"
+  | "a2aPolicy"
+> & { requesterAgentId: string };
 
 export function formatUnknownAgentError(scope: SendTargetScope, agentId: string | undefined) {
-  const { cfg, requesterAgentId, restrictToSpawned, a2aPolicy } = scope;
-  const hint = agentId
-    ? describeAgentIdForName(
-        cfg,
-        agentId,
-        (id) =>
-          id === requesterAgentId ||
-          (!restrictToSpawned && a2aPolicy.enabled && a2aPolicy.isAllowed(requesterAgentId, id)),
-      )
-    : undefined;
+  const { cfg, mainKey, requesterAgentId, restrictToSpawned } = scope;
+  // The send-access owner decides, so the hint never names a target the retry would be denied.
+  const sendAccess = createSessionVisibilityRowChecker({
+    action: "send",
+    requesterAgentId,
+    requesterSessionKey: scope.effectiveRequesterKey,
+    mainSessionKey: scope.mainSessionKey,
+    visibility: scope.sessionVisibility,
+    a2aPolicy: scope.a2aPolicy,
+  });
+  const isTarget = (id: string) => {
+    const key = resolveConfiguredAgentMainSessionKey({ cfg, agentId: id, mainKey });
+    return (
+      !restrictToSpawned && key !== undefined && sendAccess.check({ key, agentId: id }).allowed
+    );
+  };
+  const hint = agentId ? describeAgentIdForName(cfg, agentId, isTarget) : undefined;
   return `Agent "${agentId}" not found.${hint ? ` ${hint}` : ""} Run openclaw agents list to see configured agents.`;
 }
 
