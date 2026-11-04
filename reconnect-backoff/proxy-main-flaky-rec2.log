@@ -1,0 +1,307 @@
+0.00s proxy up mode=flaky listen=18790 upstream=ws://127.0.0.1:18789
+109.62s socket open (/)
+109.63s socket open (/)
+114.58s CONNECT request #1
+114.58s CONNECT request #2
+114.59s hello sent to app; closing socket (1012)
+114.60s hello sent to app; closing socket (1012)
+114.71s socket closed
+114.72s socket closed
+115.19s socket open (/)
+115.25s socket open (/)
+115.35s CONNECT request #3
+115.35s CONNECT request #4
+115.35s hello sent to app; closing socket (1012)
+115.36s hello sent to app; closing socket (1012)
+115.46s socket closed
+115.50s socket closed
+115.94s socket open (/)
+116.19s CONNECT request #5
+116.20s hello sent to app; closing socket (1012)
+116.26s socket open (/)
+116.36s socket closed
+116.46s CONNECT request #6
+116.47s hello sent to app; closing socket (1012)
+116.57s socket closed
+116.96s socket open (/)
+117.14s socket open (/)
+117.18s CONNECT request #7
+117.19s hello sent to app; closing socket (1012)
+117.45s CONNECT request #8
+117.45s socket closed
+117.46s hello sent to app; closing socket (1012)
+117.61s socket closed
+118.46s socket open (/)
+118.73s socket open (/)
+119.26s CONNECT request #9
+119.27s hello sent to app; closing socket (1012)
+119.38s CONNECT request #10
+119.39s hello sent to app; closing socket (1012)
+119.52s socket closed
+119.64s socket closed
+120.20s socket open (/)
+120.42s CONNECT request #11
+120.42s hello sent to app; closing socket (1012)
+120.44s socket open (/)
+120.61s socket closed
+120.77s CONNECT request #12
+120.78s hello sent to app; closing socket (1012)
+120.98s socket closed
+121.21s socket open (/)
+121.54s CONNECT request #13
+121.55s hello sent to app; closing socket (1012)
+121.66s socket closed
+122.07s socket open (/)
+122.22s CONNECT request #14
+122.22s hello sent to app; closing socket (1012)
+122.36s socket closed
+122.53s socket open (/)
+122.87s CONNECT request #15
+122.88s hello sent to app; closing socket (1012)
+123.12s socket closed
+123.54s socket open (/)
+123.56s socket open (/)
+123.84s CONNECT request #16
+123.84s hello sent to app; closing socket (1012)
+123.91s CONNECT request #17
+123.92s hello sent to app; closing socket (1012)
+123.98s socket closed
+124.14s socket closed
+124.38s socket open (/)
+124.64s CONNECT request #18
+124.64s hello sent to app; closing socket (1012)
+124.69s socket open (/)
+124.81s socket closed
+125.16s CONNECT request #19
+125.16s hello sent to app; closing socket (1012)
+125.25s socket closed
+125.52s socket open (/)
+125.77s CONNECT request #20
+125.78s hello sent to app; closing socket (1012)
+125.95s socket closed
+126.57s socket open (/)
+127.04s CONNECT request #21
+127.05s hello sent to app; closing socket (1012)
+127.17s socket open (/)
+127.18s socket closed
+127.43s CONNECT request #22
+127.44s hello sent to app; closing socket (1012)
+127.77s socket closed
+128.32s socket open (/)
+128.63s socket open (/)
+128.67s CONNECT request #23
+128.68s hello sent to app; closing socket (1012)
+128.91s socket closed
+129.19s CONNECT request #24
+129.20s hello sent to app; closing socket (1012)
+129.48s socket closed
+130.17s socket open (/)
+130.33s socket open (/)
+130.51s CONNECT request #25
+130.51s hello sent to app; closing socket (1012)
+130.53s CONNECT request #26
+130.54s hello sent to app; closing socket (1012)
+130.58s socket closed
+130.58s socket closed
+131.18s socket open (/)
+131.23s socket open (/)
+131.37s CONNECT request #27
+131.38s hello sent to app; closing socket (1012)
+131.43s CONNECT request #28
+131.44s hello sent to app; closing socket (1012)
+131.64s socket closed
+131.80s socket closed
+132.22s socket open (/)
+132.48s socket open (/)
+132.62s CONNECT request #29
+132.62s hello sent to app; closing socket (1012)
+132.68s CONNECT request #30
+132.68s hello sent to app; closing socket (1012)
+132.80s socket closed
+132.88s socket closed
+133.21s socket open (/)
+133.72s CONNECT request #31
+133.72s hello sent to app; closing socket (1012)
+133.78s socket open (/)
+133.80s socket closed
+134.07s CONNECT request #32
+134.08s hello sent to app; closing socket (1012)
+134.15s socket closed
+134.26s socket open (/)
+134.42s CONNECT request #33
+134.43s hello sent to app; closing socket (1012)
+134.52s socket closed
+135.09s socket open (/)
+135.13s socket open (/)
+135.67s CONNECT request #34
+135.68s hello sent to app; closing socket (1012)
+135.81s socket closed
+135.85s CONNECT request #35
+135.85s hello sent to app; closing socket (1012)
+135.92s socket closed
+136.15s socket open (/)
+136.29s CONNECT request #36
+136.30s hello sent to app; closing socket (1012)
+136.57s socket closed
+136.59s socket open (/)
+137.09s CONNECT request #37
+137.10s hello sent to app; closing socket (1012)
+137.20s socket closed
+137.40s socket open (/)
+137.80s CONNECT request #38
+137.81s hello sent to app; closing socket (1012)
+137.92s socket open (/)
+137.99s socket closed
+138.07s CONNECT request #39
+138.07s hello sent to app; closing socket (1012)
+138.13s socket closed
+138.24s socket open (/)
+138.41s CONNECT request #40
+138.41s hello sent to app; closing socket (1012)
+138.71s socket closed
+138.77s socket open (/)
+138.91s CONNECT request #41
+138.91s hello sent to app; closing socket (1012)
+139.06s socket closed
+139.09s socket open (/)
+139.46s CONNECT request #42
+139.46s hello sent to app; closing socket (1012)
+139.52s socket open (/)
+139.57s socket closed
+139.73s CONNECT request #43
+139.74s hello sent to app; closing socket (1012)
+139.84s socket closed
+140.05s socket open (/)
+140.33s CONNECT request #44
+140.34s hello sent to app; closing socket (1012)
+140.57s socket closed
+141.00s socket open (/)
+141.14s socket open (/)
+141.19s CONNECT request #45
+141.20s hello sent to app; closing socket (1012)
+141.28s socket closed
+141.29s CONNECT request #46
+141.29s hello sent to app; closing socket (1012)
+141.41s socket closed
+141.70s socket open (/)
+141.77s socket open (/)
+141.89s CONNECT request #47
+141.89s hello sent to app; closing socket (1012)
+141.90s CONNECT request #48
+141.91s hello sent to app; closing socket (1012)
+142.00s socket closed
+142.03s socket closed
+142.54s socket open (/)
+142.73s socket open (/)
+142.74s CONNECT request #49
+142.74s hello sent to app; closing socket (1012)
+142.91s CONNECT request #50
+142.92s hello sent to app; closing socket (1012)
+142.94s socket closed
+143.04s socket closed
+143.36s socket open (/)
+143.45s CONNECT request #51
+143.46s hello sent to app; closing socket (1012)
+143.76s socket closed
+143.89s socket open (/)
+144.02s CONNECT request #52
+144.03s hello sent to app; closing socket (1012)
+144.15s socket closed
+144.27s socket open (/)
+144.40s CONNECT request #53
+144.41s hello sent to app; closing socket (1012)
+144.53s socket closed
+144.90s socket open (/)
+145.14s CONNECT request #54
+145.15s hello sent to app; closing socket (1012)
+145.30s socket closed
+145.30s socket open (/)
+145.53s CONNECT request #55
+145.53s hello sent to app; closing socket (1012)
+145.75s socket closed
+146.66s socket open (/)
+146.77s socket open (/)
+146.89s CONNECT request #56
+146.90s hello sent to app; closing socket (1012)
+146.95s socket closed
+147.04s CONNECT request #57
+147.05s hello sent to app; closing socket (1012)
+147.16s socket closed
+147.98s socket open (/)
+148.01s socket open (/)
+148.17s CONNECT request #58
+148.18s hello sent to app; closing socket (1012)
+148.31s CONNECT request #59
+148.32s hello sent to app; closing socket (1012)
+148.38s socket closed
+148.49s socket closed
+148.96s socket open (/)
+149.12s CONNECT request #60
+149.13s hello sent to app; closing socket (1012)
+149.16s socket open (/)
+149.25s socket closed
+149.50s CONNECT request #61
+149.50s hello sent to app; closing socket (1012)
+149.66s socket closed
+150.28s socket open (/)
+150.56s socket open (/)
+150.88s CONNECT request #62
+150.88s hello sent to app; closing socket (1012)
+150.94s CONNECT request #63
+150.95s hello sent to app; closing socket (1012)
+151.05s socket closed
+151.07s socket closed
+151.68s socket open (/)
+151.72s socket open (/)
+152.02s CONNECT request #64
+152.02s hello sent to app; closing socket (1012)
+152.08s CONNECT request #65
+152.09s hello sent to app; closing socket (1012)
+152.11s socket closed
+152.27s socket closed
+152.67s socket open (/)
+152.74s socket open (/)
+152.78s CONNECT request #66
+152.79s hello sent to app; closing socket (1012)
+152.88s CONNECT request #67
+152.89s hello sent to app; closing socket (1012)
+152.89s socket closed
+153.07s socket closed
+153.99s socket open (/)
+154.03s socket open (/)
+154.29s CONNECT request #68
+154.29s hello sent to app; closing socket (1012)
+154.37s CONNECT request #69
+154.37s hello sent to app; closing socket (1012)
+154.45s socket closed
+154.63s socket closed
+155.32s socket open (/)
+155.50s CONNECT request #70
+155.51s hello sent to app; closing socket (1012)
+155.59s socket open (/)
+155.73s socket closed
+155.80s CONNECT request #71
+155.81s hello sent to app; closing socket (1012)
+156.04s socket closed
+156.81s socket open (/)
+156.97s socket open (/)
+157.24s CONNECT request #72
+157.25s hello sent to app; closing socket (1012)
+157.39s socket closed
+157.50s CONNECT request #73
+157.51s hello sent to app; closing socket (1012)
+157.65s socket closed
+158.14s socket open (/)
+158.31s CONNECT request #74
+158.32s hello sent to app; closing socket (1012)
+158.47s socket closed
+158.58s socket open (/)
+158.79s CONNECT request #75
+158.79s hello sent to app; closing socket (1012)
+158.92s socket closed
+159.00s socket open (/)
+159.14s CONNECT request #76
+159.14s hello sent to app; closing socket (1012)
+159.54s socket closed
+159.97s socket open (/)
+160.09s socket open (/)

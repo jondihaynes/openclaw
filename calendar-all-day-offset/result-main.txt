@@ -1,0 +1,23 @@
+apk installed:     lastUpdateTime=2026-11-04 20:20:21
+calendar.add params: {"title":"OffsetHoliday","startISO":"2026-07-05T00:00:00+10:00","endISO":"2026-07-06T00:00:00+10:00","isAllDay":true}
+$ node scripts/run-node.mjs nodes invoke --node 04773cc8baa679e56323c6b33678ea4e75faa009adee91515e932913cd455730 --command calendar.add --params '{"title":"OffsetHoliday","startISO":"2026-07-05T00:00:00+10:00","endISO":"2026-07-06T00:00:00+10:00","isAllDay":true}' --json
+[openclaw] Bun fork unavailable (unsupported platform win32-x64); using Node. Set OPENCLAW_VITEST_RUNTIME=node to silence.
+{
+  "ok": true,
+  "nodeId": "04773cc8baa679e56323c6b33678ea4e75faa009adee91515e932913cd455730",
+  "command": "calendar.add",
+  "payload": {
+    "event": {
+      "identifier": "2",
+      "title": "OffsetHoliday",
+      "startISO": "2026-07-04T00:00:00Z",
+      "endISO": "2026-07-05T00:00:00Z",
+      "isAllDay": true,
+      "calendarTitle": "Proof"
+    }
+  },
+  "payloadJSON": null
+}
+stored event: Row: 0 title=OffsetHoliday, dtstart=1783123200000, dtend=1783209600000, allDay=1
+dtstart 1783123200000 = 2026-07-04 00:00 UTC
+DONE

@@ -1,0 +1,27 @@
+0.00s proxy up mode=drop15 listen=18790 upstream=ws://127.0.0.1:18789
+83.84s socket open (/)
+83.85s socket open (/)
+86.51s CONNECT request #1
+86.52s hello sent to app; will drop the socket in 15 s
+86.53s CONNECT request #2
+86.54s hello sent to app; will drop the socket in 15 s
+101.52s dropping healthy socket now
+101.56s dropping healthy socket now
+101.56s socket closed
+101.58s socket closed
+101.78s socket open (/)
+101.96s socket open (/)
+102.06s CONNECT request #3
+102.07s hello sent to app; will drop the socket in 15 s
+102.15s CONNECT request #4
+102.16s hello sent to app; will drop the socket in 15 s
+117.07s dropping healthy socket now
+117.11s socket closed
+117.17s dropping healthy socket now
+117.19s socket closed
+117.29s socket open (/)
+117.42s CONNECT request #5
+117.42s hello sent to app; will drop the socket in 15 s
+117.67s socket open (/)
+117.76s CONNECT request #6
+117.77s hello sent to app; will drop the socket in 15 s

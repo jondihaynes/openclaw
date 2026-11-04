@@ -1,0 +1,7 @@
+0.00s proxy up mode=stall listen=18790 size=31457280 rate=1228800B/s
+56.97s added a file attachment message to chat.history
+81.33s artifacts.download artifact_managed_media_44444444-4444-4444-8444-444444444444 answered by proxy
+81.47s HTTP GET /api/chat/media/outgoing/main/44444444-4444-4444-8444-444444444444/full?mediaTicket=proof-ticket (mode=stall)
+81.48s sent 1 KB, now silent
+101.62s app closed the download connection
+TAP-DONE

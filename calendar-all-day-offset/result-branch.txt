@@ -1,0 +1,7 @@
+branch (fix applied), real app + real Gateway, calendar.add with startISO 2026-07-05T00:00:00+10:00 all-day
+stored event: Row: 0 title=OffsetHoliday, dtstart=1783209600000, dtend=1783296000000, allDay=1
+dtstart 1783209600000 = 2026-07-05 00:00 UTC
+
+Gateway CLI output for the branch run (copied from the terminal):
+{ "ok": true, "command": "calendar.add", "payload": { "event": { "identifier": "1", "title": "OffsetHoliday",
+  "startISO": "2026-07-05T00:00:00Z", "endISO": "2026-07-06T00:00:00Z", "isAllDay": true, "calendarTitle": "Proof" } } }

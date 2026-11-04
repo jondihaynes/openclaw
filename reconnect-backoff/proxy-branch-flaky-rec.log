@@ -1,0 +1,73 @@
+0.00s proxy up mode=flaky listen=18790 upstream=ws://127.0.0.1:18789
+96.94s socket open (/)
+96.94s socket open (/)
+101.44s CONNECT request #1
+101.45s hello sent to app; closing socket (1012)
+101.45s CONNECT request #2
+101.46s hello sent to app; closing socket (1012)
+101.57s socket closed
+101.60s socket closed
+103.46s socket open (/)
+103.58s socket open (/)
+103.68s CONNECT request #3
+103.69s hello sent to app; closing socket (1012)
+103.70s CONNECT request #4
+103.71s hello sent to app; closing socket (1012)
+103.76s socket closed
+103.83s socket closed
+105.17s socket open (/)
+105.50s CONNECT request #5
+105.51s hello sent to app; closing socket (1012)
+105.58s socket closed
+105.69s socket open (/)
+105.93s CONNECT request #6
+105.94s hello sent to app; closing socket (1012)
+106.08s socket closed
+107.86s socket open (/)
+107.93s CONNECT request #7
+107.93s hello sent to app; closing socket (1012)
+108.02s socket closed
+108.25s socket open (/)
+108.38s CONNECT request #8
+108.38s hello sent to app; closing socket (1012)
+108.50s socket closed
+111.22s socket open (/)
+111.36s CONNECT request #9
+111.36s hello sent to app; closing socket (1012)
+111.45s socket closed
+111.96s socket open (/)
+112.14s CONNECT request #10
+112.15s hello sent to app; closing socket (1012)
+112.27s socket closed
+116.75s socket open (/)
+116.85s CONNECT request #11
+116.86s hello sent to app; closing socket (1012)
+116.95s socket closed
+117.77s socket open (/)
+117.83s CONNECT request #12
+117.83s hello sent to app; closing socket (1012)
+117.92s socket closed
+125.48s socket open (/)
+125.62s CONNECT request #13
+125.63s hello sent to app; closing socket (1012)
+125.77s socket closed
+126.33s socket open (/)
+126.44s CONNECT request #14
+126.45s hello sent to app; closing socket (1012)
+126.52s socket closed
+140.45s socket open (/)
+140.61s CONNECT request #15
+140.61s hello sent to app; closing socket (1012)
+140.69s socket closed
+141.22s socket open (/)
+141.30s CONNECT request #16
+141.31s hello sent to app; closing socket (1012)
+141.37s socket closed
+165.59s socket open (/)
+165.76s CONNECT request #17
+165.77s hello sent to app; closing socket (1012)
+165.85s socket closed
+166.19s socket open (/)
+166.26s CONNECT request #18
+166.26s hello sent to app; closing socket (1012)
+166.36s socket closed
